@@ -27,8 +27,8 @@ import {
   LayoutTemplate,
   CreditCard,
   Users,
-  Calendar,
-  Megaphone
+  Megaphone,
+  BarChart3
 } from 'lucide-react';
 
 
@@ -300,13 +300,14 @@ const Sidebar: React.FC<SidebarProps> = ({
             <>
               {!effectiveCollapsed && <div className="px-6 py-2 mt-2 text-[10px] font-black uppercase tracking-widest text-slate-600">Tools</div>}
               <SidebarNavItem
-                view={ViewMode.SCHEDULER}
-                icon={Calendar}
-                label={t.calendar}
-                isActive={currentView === ViewMode.SCHEDULER}
+                view={ViewMode.ANALYZE_DATA}
+                icon={BarChart3}
+                label="Analyze Own Data"
+                description="AI Business Insights"
+                isActive={currentView === ViewMode.ANALYZE_DATA}
                 disabled={isLimbo}
                 effectiveCollapsed={effectiveCollapsed}
-                onClick={() => handleNavClick(ViewMode.SCHEDULER)}
+                onClick={() => handleNavClick(ViewMode.ANALYZE_DATA)}
               />
               {settings.modules.market?.enabled !== false && (
                 <SidebarNavItem

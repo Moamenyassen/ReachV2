@@ -462,24 +462,33 @@ IF v_total_customers > 0 THEN v_frequency := ROUND(
 );
 ELSE v_frequency := 0;
 END IF;
--- Efficiency = percentage of customers with GPS coordinates
-SELECT ROUND(
-        100.0 * COUNT(
-            DISTINCT CASE
-                WHEN lat IS NOT NULL
-                AND lng IS NOT NULL THEN client_code
-            END
-        ) / NULLIF(COUNT(DISTINCT client_code), 0),
-        0
-    ) INTO v_efficiency
-FROM company_uploaded_data
-WHERE company_id = p_company_id
-    AND (
-        p_branch_ids IS NULL
-        OR array_length(p_branch_ids, 1) IS NULL
-        OR branch_code = ANY(p_branch_ids)
-        OR branch_name = ANY(p_branch_ids)
-    );
+-- Efficiency = 8-Hour Shift Utilization Curve (Aggregated Average)
+-- 1. Calculate shift duration for every Rep/Day combination (20m service + 5m avg drive per visit)
+WITH daily_shifts AS (
+    SELECT 
+        rep_code, 
+        week_number, 
+        day_name,
+        COUNT(*) * 25 as total_shift_mins -- 20m service + 5m drive estimate
+    FROM company_uploaded_data
+    WHERE company_id = p_company_id
+        AND (
+            p_branch_ids IS NULL
+            OR array_length(p_branch_ids, 1) IS NULL
+            OR branch_code = ANY(p_branch_ids)
+            OR branch_name = ANY(p_branch_ids)
+        )
+    GROUP BY rep_code, week_number, day_name
+),
+shift_scores AS (
+    SELECT 
+        CASE 
+            WHEN total_shift_mins <= 480 THEN (total_shift_mins::FLOAT / 480.0) * 100
+            ELSE (480.0 / total_shift_mins::FLOAT) * 100
+        END as score
+    FROM daily_shifts
+)
+SELECT ROUND(COALESCE(AVG(score), 0), 0) INTO v_efficiency FROM shift_scores;
 -- Construct Response
 v_result := jsonb_build_object(
     'kpis',

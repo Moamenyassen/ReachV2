@@ -12,9 +12,9 @@ export { default as Pricing } from './features/Pricing/Pricing';
 export { default as ReachPricing } from './features/Pricing/ReachPricing';
 export { default as Customers } from './features/Customers/Customers';
 export { default as UserManagement } from './features/Users/UserManagement';
-export { default as Calendar } from './features/Scheduler/Calendar';
 export { default as PartnerProgram } from './features/Referral/PartnerProgram';
 export { default as ScannerV2 } from './features/Market/ScannerV2';
+export { default as AnalyzeDataModule } from './features/Analyzer/AnalyzeDataModule';
 
 // Layout & UI Components
 export { default as MapVisualizer } from './MapVisualizer';

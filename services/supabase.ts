@@ -37,12 +37,26 @@ const getEnvVar = (key: string) => {
 const SUPABASE_URL = getEnvVar('VITE_SUPABASE_URL') || 'https://mpkfvaccnsucdmxxtosu.supabase.co';
 const SUPABASE_KEY = getEnvVar('VITE_SUPABASE_ANON_KEY') || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1wa2Z2YWNjbnN1Y2RteHh0b3N1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njc3NzQ3ODQsImV4cCI6MjA4MzM1MDc4NH0.dlfstdHCzWJF-CMCa93J4RsZvm2nwhqnE5hvZ_8pkEo';
 
-export let supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+if (!SUPABASE_URL || !SUPABASE_KEY) {
+    console.error('[Security] Missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY in environment variables. Application will fail to connect securely.');
+}
+
+let customHeaders: Record<string, string> = {};
+
+export const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
+    global: {
+        fetch: (url, options: RequestInit = {}) => {
+            const fetchHeaders = new Headers(options.headers);
+            for (const [k, v] of Object.entries(customHeaders)) {
+                fetchHeaders.set(k, v);
+            }
+            return fetch(url, { ...options, headers: fetchHeaders });
+        }
+    }
+});
 
 export const updateSupabaseHeaders = (headers: Record<string, string>) => {
-    supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
-        global: { headers }
-    });
+    customHeaders = headers;
 };
 
 // ==========================================
@@ -296,13 +310,13 @@ export const deleteGlobalReachLead = async (id: string) => {
 };
 
 export const deleteAllGlobalReachLeads = async () => {
-    // Safety check: Delete all rows by checking valid ID
-    const { error } = await supabase
-        .from('reach_global_leads')
-        .delete()
-        .neq('id', '00000000-0000-0000-0000-000000000000'); // Delete everything effectively
-
-    if (error) throw error;
+    // SECURITY FIX: Prevent unsafe frontend deletion of all rows.
+    // Instead of doing `.neq('id', 'false-id')`, we require a secure RPC or manual DB truncation.
+    const { error } = await supabase.rpc('truncate_global_leads');
+    if (error) {
+        console.error("RPC 'truncate_global_leads' failed or not implemented:", error);
+        throw new Error('Safe deletion RPC not found. Aborting unsafe delete-all operation for security.');
+    }
 };
 
 export const getAllCompanies = async (): Promise<Company[]> => {
@@ -731,7 +745,10 @@ export const fetchCustomers = async (
             // Joined Route Info
             routeName: routes,
             week: weeks,
-            day: days
+            day: days,
+            // Meta info
+            addedDate: row.created_at,
+            addedBy: row.dynamic_data?.addedBy || '-'
         } as Customer;
     });
 
@@ -1515,8 +1532,8 @@ export const subscribeToCompany = (companyId: string, callback: (company: Compan
         });
     });
 
-    const channel = supabase.channel(`company_${companyId} `)
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'companies', filter: `id = eq.${companyId} ` }, (payload) => {
+    const channel = supabase.channel(`company_${companyId}`)
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'companies', filter: `id=eq.${companyId}` }, (payload) => {
             supabase.from('companies').select('*').eq('id', companyId).single().then(({ data }) => {
                 callback(data ? mapRowToCompany(data) : null);
             });
@@ -1950,6 +1967,34 @@ export const fetchCompanyRoutes = async (companyId: string, branchFilter?: strin
     // Map correctly to unique names for dropdown, but keep internal ID usage if needed later
     const uniqueRoutes = Array.from(new Set(data?.map((row: any) => row.name).filter(Boolean)));
     return uniqueRoutes.map(r => ({ routeName: r }));
+};
+
+/**
+ * NEW: Fetches aggregated customer counts for branches and routes via RPC.
+ * Used for displaying portfolio counts in filter dropdowns.
+ */
+interface CacheEntry<T> {
+    data: T;
+    timestamp: number;
+}
+const filterStatsCache: Record<string, CacheEntry<{ branches: Record<string, number>, routes: Record<string, number> }>> = {};
+
+export const fetchFilterStats = async (companyId: string, forceRefresh: boolean = false): Promise<{ branches: Record<string, number>, routes: Record<string, number> }> => {
+    const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+    if (!forceRefresh && filterStatsCache[companyId] && (Date.now() - filterStatsCache[companyId].timestamp < CACHE_TTL)) {
+        return filterStatsCache[companyId].data;
+    }
+
+    try {
+        const { data, error } = await supabase.rpc('get_filter_stats', { p_company_id: companyId });
+        if (error) throw error;
+        const result = data || { branches: {}, routes: {} };
+        filterStatsCache[companyId] = { data: result, timestamp: Date.now() };
+        return result;
+    } catch (err) {
+        console.error("Error fetching filter stats:", err);
+        return { branches: {}, routes: {} };
+    }
 };
 
 export const fetchCompanyReps = async (companyId: string, branchFilter?: string[], routeFilter?: string[]) => {
@@ -2733,8 +2778,8 @@ export const subscribeToHistory = (companyId: string, callback: (logs: HistoryLo
     });
 
     // We don't strictly need realtime for history as it updates on actions, but consistent with Firebase:
-    const channel = supabase.channel(`history_${companyId} `)
-        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'history_logs', filter: `company_id = eq.${companyId} ` }, (payload) => {
+    const channel = supabase.channel(`history_${companyId}`)
+        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'history_logs', filter: `company_id=eq.${companyId}` }, (payload) => {
             // re-fetch on insert
             supabase.from('history_logs').select('*').eq('company_id', companyId).order('created_at', { ascending: false }).limit(20).then(({ data }) => {
                 if (data) {
@@ -3902,18 +3947,85 @@ export const getDashboardInsights = async (
 
         const { data, error } = await query;
 
-        if (error) {
-            console.error('Error fetching dashboard insights via RPC:', error);
-            // Fallback to empty structure if RPC fails (or return null to show error state)
-            return null;
+        if (error || !data) {
+            console.warn('[Dashboard] RPC failed, falling back to direct query:', error?.message);
+            return await getDashboardInsightsFallback(companyId, branchIds);
         }
 
-        // The RPC returns { kpis: ..., routeHealth: ..., alerts: ... } matching our interface
-        // We cast it to ensure type safety, adding default values if needed
         return data as DashboardInsights;
 
     } catch (err) {
-        console.error('Unexpected error in getDashboardInsights:', err);
+        console.warn('[Dashboard] Unexpected error, trying fallback:', err);
+        return await getDashboardInsightsFallback(companyId, branchIds);
+    }
+};
+
+// Client-side fallback: compute KPIs directly from normalized_customers + route_visits
+const getDashboardInsightsFallback = async (
+    companyId: string,
+    branchIds?: string[]
+): Promise<DashboardInsights | null> => {
+    try {
+        let query = supabase
+            .from('normalized_customers')
+            .select(`
+                id, lat, lng, classification,
+                branch_id,
+                visits:route_visits(week_number, day_name, route_id)
+            `)
+            .eq('company_id', companyId)
+            .eq('is_active', true);
+
+        if (branchIds && branchIds.length > 0) {
+            // Resolve UUIDs
+            const { data: brs } = await supabase
+                .from('company_branches')
+                .select('id, code, name_en')
+                .eq('company_id', companyId);
+            const ids = (brs || [])
+                .filter(b => branchIds.includes(b.id) || branchIds.includes(b.code) || branchIds.includes(b.name_en))
+                .map(b => b.id);
+            if (ids.length > 0) query = query.in('branch_id', ids);
+        }
+
+        const { data: customers, error } = await query;
+        if (error || !customers) return null;
+
+        const totalCustomers = customers.length;
+        const allVisits = customers.flatMap((c: any) => c.visits || []);
+        const totalVisits = allVisits.length;
+        const activeRoutes = new Set(allVisits.map((v: any) => v.route_id).filter(Boolean)).size;
+        const missingGps = customers.filter((c: any) => !c.lat || !c.lng).length;
+
+        // Route health bucketing by size
+        const routeClientCount: Record<string, number> = {};
+        allVisits.forEach((v: any) => {
+            if (v.route_id) routeClientCount[v.route_id] = (routeClientCount[v.route_id] || 0) + 1;
+        });
+        let stable = 0, under = 0, over = 0;
+        Object.values(routeClientCount).forEach(cnt => {
+            if (cnt < 30) under++;
+            else if (cnt > 120) over++;
+            else stable++;
+        });
+
+        return {
+            kpis: {
+                totalCustomers,
+                activeRoutes,
+                totalVisits,
+                totalDistance: 0,
+                totalTime: 0,
+                avgVisitsPerRoute: activeRoutes > 0 ? Math.round(totalVisits / activeRoutes) : 0,
+                timePerUser: 0,
+                frequency: totalCustomers > 0 ? Math.round((totalVisits / totalCustomers) * 10) / 10 : 0,
+                efficiency: 0,
+            },
+            routeHealth: { stable, under, over, total: stable + under + over },
+            alerts: { missingGps, proximityIssues: 0 },
+        };
+    } catch (err) {
+        console.error('[Dashboard fallback] Failed:', err);
         return null;
     }
 };
@@ -4408,5 +4520,36 @@ export const getNormalizedDashboardInsights = async (companyId: string) => {
     } catch (err) {
         console.error('[Normalized] Dashboard insights error:', err);
         return null;
+    }
+};
+
+export const getLicenseUsageStats = async (companyId: string) => {
+    try {
+        // 1. Total Customers (Exact Count)
+        const { count: customerCount, error: customerError } = await supabase
+            .from('company_customers')
+            .select('*', { count: 'exact', head: true })
+            .eq('company_id', companyId);
+            
+        if (customerError) throw customerError;
+
+        // 2. Total Distinct Routes
+        // We fetch the distinct route names from the company_customers table
+        const { data: routeData, error: routeError } = await supabase
+            .from('company_customers')
+            .select('route_name')
+            .eq('company_id', companyId);
+            
+        if (routeError) throw routeError;
+        
+        const distinctRoutes = new Set(routeData?.map(r => r.route_name).filter(Boolean)).size;
+
+        return {
+            customers: customerCount || 0,
+            routes: distinctRoutes || 0
+        };
+    } catch (err) {
+        console.error('Error fetching license usage stats:', err);
+        return { customers: 0, routes: 0 };
     }
 };

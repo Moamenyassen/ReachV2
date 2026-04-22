@@ -1,10 +1,29 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { User } from '../../types';
-import { provisionDemoCompany, registerReachCustomer, registerGlobalUser } from '../../services/supabase';
+import { registerGlobalUser } from '../../services/supabase';
 import { signIn as supabaseSignIn, signUp as supabaseSignUp, resetPassword } from '../../services/authService';
-import { validateRegistrationForm, validateLoginForm, isValidEmail } from '../../utils';
-import { Lock, User as UserIcon, AlertCircle, Truck, MapPin, Navigation, ArrowRight, Cpu, Network, Zap, Building2, ShieldCheck, Globe, Briefcase } from 'lucide-react';
+import { validateRegistrationForm, isValidEmail } from '../../utils';
+import { Lock, User as UserIcon, AlertCircle, Truck, Network, Zap, Building2, ShieldCheck, Globe, ArrowRight, Cpu, Eye, EyeOff, Mail, Timer } from 'lucide-react';
 import BrandLogo from '../common/BrandLogo';
+
+// --- Rate Limiting Constants ---
+const MAX_LOGIN_ATTEMPTS = 5;
+const LOCKOUT_SECONDS = 30;
+
+// --- Password Strength Helper ---
+const getPasswordStrength = (password: string): { score: number; label: string; color: string } => {
+  if (password.length === 0) return { score: 0, label: '', color: '' };
+  let score = 0;
+  if (password.length >= 8) score++;
+  if (password.length >= 12) score++;
+  if (/[A-Z]/.test(password)) score++;
+  if (/[0-9]/.test(password)) score++;
+  if (/[^a-zA-Z0-9]/.test(password)) score++;
+  if (score <= 1) return { score, label: 'Weak', color: 'bg-red-500' };
+  if (score <= 2) return { score, label: 'Fair', color: 'bg-amber-500' };
+  if (score <= 3) return { score, label: 'Good', color: 'bg-blue-500' };
+  return { score, label: 'Strong', color: 'bg-emerald-500' };
+};
 
 
 const backgroundGridStyle: React.CSSProperties = {
@@ -28,19 +47,68 @@ interface LoginProps {
 const Login: React.FC<LoginProps> = ({ onAttemptLogin, onSysAdminLogin, language, onSelectUser }) => {
 
   const isDarkMode = true; // Always force dark mode for Login/Splash per brand design
-  // const [companyName, setCompanyName] = useState(''); // Removed
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [showSplash, setShowSplash] = useState(true);
   const [ambiguousUsers, setAmbiguousUsers] = useState<User[]>([]);
+  // Rate limiting
+  const [loginAttempts, setLoginAttempts] = useState(0);
+  const [lockoutRemaining, setLockoutRemaining] = useState(0);
+  const lockoutTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Forgot password
+  const [isForgotPassword, setIsForgotPassword] = useState(false);
+  const [forgotEmail, setForgotEmail] = useState('');
+  const [forgotSuccess, setForgotSuccess] = useState('');
+  const [forgotError, setForgotError] = useState('');
+  const [forgotLoading, setForgotLoading] = useState(false);
+
   // Splash screen effect
   useEffect(() => {
-
     const timer = setTimeout(() => setShowSplash(false), 2500);
     return () => clearTimeout(timer);
   }, []);
+
+  // Cleanup lockout timer on unmount
+  useEffect(() => {
+    return () => { if (lockoutTimer.current) clearInterval(lockoutTimer.current); };
+  }, []);
+
+  const startLockout = () => {
+    setLockoutRemaining(LOCKOUT_SECONDS);
+    lockoutTimer.current = setInterval(() => {
+      setLockoutRemaining(prev => {
+        if (prev <= 1) {
+          clearInterval(lockoutTimer.current!);
+          lockoutTimer.current = null;
+          setLoginAttempts(0);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+  };
+
+  const handleForgotPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setForgotError('');
+    setForgotSuccess('');
+    if (!forgotEmail || !isValidEmail(forgotEmail)) {
+      setForgotError('Please enter a valid email address.');
+      return;
+    }
+    setForgotLoading(true);
+    try {
+      await resetPassword(forgotEmail);
+      setForgotSuccess('Password reset email sent! Check your inbox.');
+    } catch (err: any) {
+      setForgotError(err.message || 'Failed to send reset email.');
+    } finally {
+      setForgotLoading(false);
+    }
+  };
   const t = {
 
     title: language === 'ar' ? 'مرحبًا بعودتك' : 'Welcome Back',
@@ -175,27 +243,38 @@ const Login: React.FC<LoginProps> = ({ onAttemptLogin, onSysAdminLogin, language
     }
   };
   const handleLogin = async (e: React.FormEvent) => {
-
     e.preventDefault();
     setError('');
+
+    // Check lockout
+    if (lockoutRemaining > 0) return;
+
     setIsLoading(true);
     setAmbiguousUsers([]);
 
     try {
-
-      // Legacy signature requires company string, passing empty
       const results = await onAttemptLogin('', username, password);
+
+      // Success — reset attempts
+      setLoginAttempts(0);
 
       // Handle Multiple Matches (Ambiguous Login)
       if (results && Array.isArray(results) && results.length > 1) {
-
         setAmbiguousUsers(results);
         setIsLoading(false);
         return;
       }
     } catch (err: any) {
+      const newAttempts = loginAttempts + 1;
+      setLoginAttempts(newAttempts);
 
-      setError(err.message || 'Login failed');
+      if (newAttempts >= MAX_LOGIN_ATTEMPTS) {
+        setError(`Too many failed attempts. Locked for ${LOCKOUT_SECONDS}s.`);
+        startLockout();
+      } else {
+        const remaining = MAX_LOGIN_ATTEMPTS - newAttempts;
+        setError(`${err.message || 'Login failed'}. ${remaining} attempt${remaining !== 1 ? 's' : ''} remaining.`);
+      }
       setIsLoading(false);
     }
   };
@@ -421,16 +500,56 @@ const Login: React.FC<LoginProps> = ({ onAttemptLogin, onSysAdminLogin, language
                 </div>
 
                 {/* PASSWORD SETTING */}
-                <div className="pt-4 border-t border-white/10 grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="text-xs font-bold uppercase text-indigo-400">Password</label>
-                    <input type="password" required value={regData.password} onChange={e => setRegData({ ...regData, password: e.target.value })} className="w-full bg-white/10 border border-white/10 rounded-lg p-3 text-sm focus:ring-2 focus:ring-blue-500 outline-none" placeholder="Create Password" />
+                <div className="pt-4 border-t border-white/10">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="text-xs font-bold uppercase text-indigo-400">Password</label>
+                      <input
+                        type="password"
+                        required
+                        value={regData.password}
+                        onChange={e => setRegData({ ...regData, password: e.target.value })}
+                        className="w-full bg-white/10 border border-white/10 rounded-lg p-3 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                        placeholder="Create Password"
+                        minLength={8}
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs font-bold uppercase text-indigo-400">Confirm</label>
+                      <input
+                        type="password"
+                        required
+                        value={regData.confirmPassword}
+                        onChange={e => setRegData({ ...regData, confirmPassword: e.target.value })}
+                        className="w-full bg-white/10 border border-white/10 rounded-lg p-3 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                        placeholder="Repeat Password"
+                        minLength={8}
+                      />
+                    </div>
                   </div>
-                  <div>
-                    <label className="text-xs font-bold uppercase text-indigo-400">Confirm</label>
-                    <input type="password" required value={regData.confirmPassword} onChange={e => setRegData({ ...regData, confirmPassword: e.target.value })} className="w-full bg-white/10 border border-white/10 rounded-lg p-3 text-sm focus:ring-2 focus:ring-blue-500 outline-none" placeholder="Repeat Password" />
-                  </div>
+                  {/* Password Strength Meter */}
+                  {regData.password.length > 0 && (() => {
+                    const strength = getPasswordStrength(regData.password);
+                    return (
+                      <div className="mt-3">
+                        <div className="flex gap-1 mb-1">
+                          {[1, 2, 3, 4].map(i => (
+                            <div
+                              key={i}
+                              className={`h-1 flex-1 rounded-full transition-all duration-300 ${
+                                i <= strength.score ? strength.color : 'bg-white/10'
+                              }`}
+                            />
+                          ))}
+                        </div>
+                        <p className="text-[10px] font-bold text-right" style={{ color: strength.score <= 1 ? '#ef4444' : strength.score <= 2 ? '#f59e0b' : strength.score <= 3 ? '#3b82f6' : '#10b981' }}>
+                          {strength.label}
+                        </p>
+                      </div>
+                    );
+                  })()}
                 </div>
+
               </div>
 
               <button type="submit" disabled={isLoading} className="w-full mt-6 bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-xl transition-all flex items-center justify-center gap-2">
@@ -457,25 +576,92 @@ const Login: React.FC<LoginProps> = ({ onAttemptLogin, onSysAdminLogin, language
             </div>
 
             <p className="text-xs font-bold text-indigo-400 tracking-widest uppercase mb-2">Flagship Application</p>
-            <h1 className={`text-3xl md:text-4xl font-black mb-2 tracking-tight flex items-center md:justify-start justify-center gap-3 ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
-              {t.brand} <span className="bg-blue-600 text-white text-xs px-2 py-1 rounded-md font-bold self-start mt-1">AI</span>
+            <h1 
+              onDoubleClick={onSysAdminLogin}
+              className={`text-3xl md:text-4xl font-black mb-2 tracking-tight flex items-center md:justify-start justify-center gap-3 cursor-default select-none ${isDarkMode ? 'text-white' : 'text-slate-900'}`}
+            >
+              {t.brand} <span className="bg-blue-600 text-white text-xs px-2 py-1 rounded-md font-bold self-start mt-1 pointer-events-none">AI</span>
             </h1>
           </div>
 
-          {/* Form */}
+          {/* Form — switches between Login, Forgot Password */}
+          {isForgotPassword ? (
+            <form onSubmit={handleForgotPassword} className="space-y-6 max-w-sm mx-auto md:mx-0 w-full animate-in fade-in duration-300">
+              <div className="mb-2">
+                <h2 className="text-xl font-black text-white mb-1">Reset Password</h2>
+                <p className="text-sm text-gray-400">Enter your email and we'll send a reset link.</p>
+              </div>
+
+              {forgotError && (
+                <div className="bg-red-500/10 border border-red-500/20 text-red-200 text-sm p-4 rounded-lg flex items-center gap-3">
+                  <AlertCircle className="w-5 h-5 shrink-0" />
+                  <span className="font-medium">{forgotError}</span>
+                </div>
+              )}
+              {forgotSuccess && (
+                <div className="bg-emerald-500/10 border border-emerald-500/20 text-emerald-200 text-sm p-4 rounded-lg flex items-center gap-3">
+                  <ShieldCheck className="w-5 h-5 shrink-0" />
+                  <span className="font-medium">{forgotSuccess}</span>
+                </div>
+              )}
+
+              {!forgotSuccess && (
+                <>
+                  <div className="space-y-2 group">
+                    <label className="text-xs font-bold uppercase tracking-wider text-indigo-300/70">Email Address</label>
+                    <div className="relative">
+                      <Mail className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-indigo-400" />
+                      <input
+                        type="email"
+                        value={forgotEmail}
+                        onChange={(e) => setForgotEmail(e.target.value)}
+                        className="w-full rounded-xl py-4 pl-12 pr-4 bg-white/5 border border-white/10 text-white placeholder-white/20 hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all"
+                        placeholder="your@company.com"
+                        required
+                        autoComplete="email"
+                      />
+                    </div>
+                  </div>
+                  <button
+                    type="submit"
+                    disabled={forgotLoading}
+                    className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold py-4 rounded-xl shadow-lg transition-all active:scale-95 flex items-center justify-center gap-3"
+                  >
+                    {forgotLoading
+                      ? <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                      : <><Mail className="w-5 h-5" /> Send Reset Link</>
+                    }
+                  </button>
+                </>
+              )}
+
+              <button
+                type="button"
+                onClick={() => { setIsForgotPassword(false); setForgotEmail(''); setForgotSuccess(''); setForgotError(''); }}
+                className="w-full text-sm text-slate-400 hover:text-white transition-colors font-medium py-2"
+              >
+                ← Back to Login
+              </button>
+            </form>
+          ) : (
           <form onSubmit={handleLogin} className="space-y-6 max-w-sm mx-auto md:mx-0 w-full">
 
             {error && (
-              <div className="bg-red-500/10 border border-red-500/20 text-red-200 text-sm p-4 rounded-lg flex items-center gap-3 animate-in slide-in-from-top-2">
-                <AlertCircle className="w-5 h-5 shrink-0" />
-                <span className="font-medium">{error}</span>
+              <div className="bg-red-500/10 border border-red-500/20 text-red-200 text-sm p-4 rounded-lg flex items-start gap-3 animate-in slide-in-from-top-2">
+                <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
+                <div>
+                  <span className="font-medium block">{error}</span>
+                  {lockoutRemaining > 0 && (
+                    <span className="flex items-center gap-1.5 mt-1 text-xs text-red-300">
+                      <Timer className="w-3.5 h-3.5" /> Retry in {lockoutRemaining}s
+                    </span>
+                  )}
+                </div>
               </div>
             )}
 
-            {/* Company Name Input Removed */}
-
             <div className="space-y-2 group">
-              <label className={`text-xs font-bold uppercase tracking-wider ${isDarkMode ? 'text-indigo-300/70' : 'text-slate-500'}`}>{t.username}</label>
+              <label className={`text-xs font-bold uppercase tracking-wider ${isDarkMode ? 'text-indigo-300/70' : 'text-slate-500'}`}>Username or Email</label>
               <div className="relative">
                 <div className={`absolute left-4 top-1/2 -translate-y-1/2 transition-colors ${isDarkMode ? 'text-indigo-400 group-focus-within:text-white' : 'text-slate-400 group-focus-within:text-blue-600'}`}>
                   <UserIcon className="w-5 h-5" />
@@ -485,44 +671,67 @@ const Login: React.FC<LoginProps> = ({ onAttemptLogin, onSysAdminLogin, language
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
                   className={`w-full rounded-xl py-4 pl-12 pr-4 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-transparent transition-all ${isDarkMode ? 'bg-white/5 border border-white/10 text-white placeholder-white/20 hover:bg-white/10' : 'bg-white border border-slate-200 text-slate-900 placeholder-slate-400 hover:bg-slate-50 shadow-sm'}`}
-                  placeholder="Authorized ID"
+                  placeholder="Authorized ID or Email"
                   required
+                  disabled={lockoutRemaining > 0}
+                  autoComplete="username"
                 />
               </div>
             </div>
 
             <div className="space-y-2 group">
-              <label className={`text-xs font-bold uppercase tracking-wider ${isDarkMode ? 'text-indigo-300/70' : 'text-slate-500'}`}>{t.password}</label>
+              <div className="flex items-center justify-between">
+                <label className={`text-xs font-bold uppercase tracking-wider ${isDarkMode ? 'text-indigo-300/70' : 'text-slate-500'}`}>{t.password}</label>
+                <button
+                  type="button"
+                  onClick={() => setIsForgotPassword(true)}
+                  className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors font-medium"
+                >
+                  Forgot password?
+                </button>
+              </div>
               <div className="relative">
                 <div className={`absolute left-4 top-1/2 -translate-y-1/2 transition-colors ${isDarkMode ? 'text-indigo-400 group-focus-within:text-white' : 'text-slate-400 group-focus-within:text-blue-600'}`}>
                   <Lock className="w-5 h-5" />
                 </div>
                 <input
-                  type="password"
+                  type={showPassword ? 'text' : 'password'}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  className={`w-full rounded-xl py-4 pl-12 pr-4 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-transparent transition-all ${isDarkMode ? 'bg-white/5 border border-white/10 text-white placeholder-white/20 hover:bg-white/10' : 'bg-white border border-slate-200 text-slate-900 placeholder-slate-400 hover:bg-slate-50 shadow-sm'}`}
+                  className={`w-full rounded-xl py-4 pl-12 pr-12 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-transparent transition-all ${isDarkMode ? 'bg-white/5 border border-white/10 text-white placeholder-white/20 hover:bg-white/10' : 'bg-white border border-slate-200 text-slate-900 placeholder-slate-400 hover:bg-slate-50 shadow-sm'}`}
                   placeholder="Secure Key"
                   required
+                  disabled={lockoutRemaining > 0}
+                  autoComplete="current-password"
                 />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute right-4 top-1/2 -translate-y-1/2 text-indigo-400 hover:text-white transition-colors"
+                  tabIndex={-1}
+                  aria-label={showPassword ? 'Hide password' : 'Show password'}
+                >
+                  {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                </button>
               </div>
             </div>
 
             <button
               type="submit"
-              disabled={isLoading}
-              className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold py-4 rounded-xl shadow-lg shadow-blue-900/20 transition-all transform hover:-translate-y-0.5 active:scale-95 flex items-center justify-center gap-3 group"
+              disabled={isLoading || lockoutRemaining > 0}
+              className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 disabled:from-blue-900 disabled:to-indigo-900 disabled:cursor-not-allowed text-white font-bold py-4 rounded-xl shadow-lg shadow-blue-900/20 transition-all transform hover:-translate-y-0.5 active:scale-95 flex items-center justify-center gap-3 group"
             >
               {isLoading ? (
-                <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+                <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+              ) : lockoutRemaining > 0 ? (
+                <><Timer className="w-5 h-5" /> Locked ({lockoutRemaining}s)</>
               ) : (
-                <>
-                  {t.signIn}
-                  <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
-                </>
+                <>{t.signIn}<ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" /></>
               )}
             </button>
           </form>
+          )}
+
 
           {/* New Registration Toggle */}
           <div className="mt-6 text-center">

@@ -1,33 +1,41 @@
 
-import React, { useState } from 'react';
-import { ShieldCheck, Lock, ArrowRight, AlertTriangle } from 'lucide-react';
-import { ViewMode } from '../../types';
+import React, { useState, useRef } from 'react';
+import { ShieldCheck, Lock, ArrowRight, AlertTriangle, Eye, EyeOff, Timer } from 'lucide-react';
 
 interface SysAdminLoginProps {
     onLoginSuccess: () => void;
     onBack: () => void;
-    isDarkMode: boolean; // Add prop
+    isDarkMode: boolean;
 }
+
+// Basic credential check
+const checkSysAdminCredentials = (username: string, password: string): boolean => {
+    return username === 'sysadmin' && password === 'Moamen224!';
+};
 
 const SysAdminLogin: React.FC<SysAdminLoginProps> = ({ onLoginSuccess, onBack, isDarkMode }) => {
     const [username, setUsername] = useState('');
     const [password, setPassword] = useState('');
     const [error, setError] = useState('');
+    const [showPassword, setShowPassword] = useState(false);
 
     const handleLogin = (e: React.FormEvent) => {
         e.preventDefault();
-        if (username === 'sysadmin' && password === '123') {
+
+        const isValid = checkSysAdminCredentials(username, password);
+
+        if (isValid) {
             onLoginSuccess();
         } else {
-            setError('Invalid System Admin Credentials');
+            setError('Invalid credentials.');
+            setPassword('');
         }
     };
 
     return (
         <div className={`min-h-screen flex items-center justify-center p-4 relative overflow-hidden font-sans ${isDarkMode ? 'bg-[#020617]' : 'bg-slate-50'}`}>
             {/* Background Effects */}
-            <div className={`absolute inset-0 bg-[radial-gradient(circle_at_center,_var(--tw-gradient-stops))] ${isDarkMode ? 'from-indigo-900/20 via-[#020617] to-[#020617]' : 'from-indigo-100/50 via-slate-50 to-slate-50'}`}></div>
-            <div className={`absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] ${isDarkMode ? 'opacity-20 mix-blend-overlay' : 'opacity-10 mix-blend-multiply'} pointer-events-none`}></div>
+            <div className={`absolute inset-0 bg-[radial-gradient(circle_at_center,_var(--tw-gradient-stops))] ${isDarkMode ? 'from-indigo-900/20 via-[#020617] to-[#020617]' : 'from-indigo-100/50 via-slate-50 to-slate-50'}`} />
 
             <div className="relative z-10 w-full max-w-md">
                 <div className="text-center mb-8">
@@ -41,9 +49,11 @@ const SysAdminLogin: React.FC<SysAdminLoginProps> = ({ onLoginSuccess, onBack, i
                 <div className={`${isDarkMode ? 'bg-white/5 border-white/10' : 'bg-white border-slate-200 shadow-xl'} backdrop-blur-xl border p-8 rounded-3xl`}>
                     <form onSubmit={handleLogin} className="space-y-6">
                         {error && (
-                            <div className="p-4 bg-red-500/10 border border-red-500/20 rounded-xl flex items-center gap-3 text-red-400 text-sm font-bold">
-                                <AlertTriangle className="w-5 h-5" />
-                                {error}
+                            <div className="p-4 bg-red-500/10 border border-red-500/20 rounded-xl flex items-center gap-3 text-red-400 text-sm font-bold animate-in slide-in-from-top-2 duration-200">
+                                <AlertTriangle className="w-5 h-5 shrink-0" />
+                                <div className="flex-1">
+                                    {error}
+                                </div>
                             </div>
                         )}
 
@@ -55,8 +65,10 @@ const SysAdminLogin: React.FC<SysAdminLoginProps> = ({ onLoginSuccess, onBack, i
                                     type="text"
                                     value={username}
                                     onChange={(e) => setUsername(e.target.value)}
+                                    autoComplete="username"
                                     className={`w-full border rounded-xl py-4 pl-12 pr-4 placeholder-slate-600 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all font-bold ${isDarkMode ? 'bg-black/40 border-white/10 text-white' : 'bg-slate-50 border-slate-200 text-slate-900'}`}
                                     placeholder="Enter ID"
+                                    required
                                 />
                             </div>
                         </div>
@@ -66,12 +78,23 @@ const SysAdminLogin: React.FC<SysAdminLoginProps> = ({ onLoginSuccess, onBack, i
                             <div className="relative">
                                 <Lock className={`absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 ${isDarkMode ? 'text-slate-500' : 'text-slate-400'}`} />
                                 <input
-                                    type="password"
+                                    type={showPassword ? 'text' : 'password'}
                                     value={password}
                                     onChange={(e) => setPassword(e.target.value)}
-                                    className={`w-full border rounded-xl py-4 pl-12 pr-4 placeholder-slate-600 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all font-bold ${isDarkMode ? 'bg-black/40 border-white/10 text-white' : 'bg-slate-50 border-slate-200 text-slate-900'}`}
+                                    autoComplete="current-password"
+                                    className={`w-full border rounded-xl py-4 pl-12 pr-12 placeholder-slate-600 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all font-bold ${isDarkMode ? 'bg-black/40 border-white/10 text-white' : 'bg-slate-50 border-slate-200 text-slate-900'}`}
                                     placeholder="••••••••"
+                                    required
                                 />
+                                <button
+                                    type="button"
+                                    onClick={() => setShowPassword(!showPassword)}
+                                    className={`absolute right-4 top-1/2 -translate-y-1/2 transition-colors ${isDarkMode ? 'text-slate-500 hover:text-white' : 'text-slate-400 hover:text-slate-700'}`}
+                                    tabIndex={-1}
+                                    aria-label={showPassword ? 'Hide password' : 'Show password'}
+                                >
+                                    {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                                </button>
                             </div>
                         </div>
 

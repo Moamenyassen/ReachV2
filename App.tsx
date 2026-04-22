@@ -3,8 +3,10 @@ import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { AnimatePresence } from 'framer-motion';
 import { Customer, ViewMode, User, UserRole, HistoryLog, Company, UserPreferences, HistoryStats } from './types';
 import { ReachPricing, ClassicLayout, ModernOSLayout, PasswordChangeModal } from './components';
-import { Loader2 } from 'lucide-react';
+import { Loader2, X } from 'lucide-react';
 import { TRANSLATIONS, DEFAULT_COMPANY_SETTINGS } from './config/constants';
+import { ToastProvider, useToast } from './components/common/Toast';
+import { ConfirmProvider, useConfirm } from './components/common/ConfirmDialog';
 
 import {
   Login,
@@ -58,6 +60,9 @@ import {
 import { signIn as supabaseSignIn, signOut as supabaseSignOut, onAuthStateChange } from './services/authService';
 
 const App: React.FC = () => {
+  const { error: errorToast, success: successToast, warning: warningToast } = useToast();
+  const { confirm } = useConfirm();
+
   // Initialize View State (with persistence)
   const [view, setViewState] = useState<string>(() => {
     // Try to restore last view, else default to LOGIN
@@ -124,10 +129,12 @@ const App: React.FC = () => {
   // SUBSCRIPTION GATING LOGIC
   const isSubscriptionLocked = useMemo(() => {
     if (!currentUser || !currentCompany) return false;
-    // For now, treat SYS_ADMIN as ADMIN or check specific username if needed
-    const isSettingsValid = currentCompany?.subscriptionTier && (currentCompany.subscriptionTier as string) !== 'NONE';
+    // Lock if subscription tier is missing or explicitly set to NONE
+    // (sysadmin is never locked)
+    if (currentUser.username === 'sysadmin') return false;
     return !currentCompany.subscriptionTier || (currentCompany.subscriptionTier as string) === 'NONE';
   }, [currentUser, currentCompany]);
+
 
   const isLimbo = useMemo(() => {
     // A user is in Limbo if they are logged in but have no companyId, 
@@ -396,33 +403,7 @@ const App: React.FC = () => {
     }
   }, [view, currentUser]);
 
-  /* --- WELCOME MODAL --- */
-  const [showWelcome, setShowWelcome] = useState(false);
-
-  const WelcomeModal = () => (
-    <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/80 backdrop-blur-md animate-in fade-in duration-300">
-      <div className="bg-[#0f172a] border border-cyan-500/30 rounded-3xl p-10 max-w-lg w-full text-center relative shadow-2xl shadow-cyan-500/20">
-        <div className="absolute -top-10 left-1/2 -translate-x-1/2 w-20 h-20 bg-gradient-to-br from-cyan-400 to-blue-600 rounded-full flex items-center justify-center shadow-lg transform scale-125">
-          <span className="text-4xl">🚀</span>
-        </div>
-        <h2 className="text-3xl font-black text-white mt-8 mb-4">Welcome Aboard!</h2>
-        <p className="text-lg text-slate-300 mb-8">Your subscription is active. You now have full access to <span className="text-cyan-400 font-bold">{currentCompany?.name}</span>'s powerful logistics tools.</p>
-
-        <div className="flex flex-col gap-3">
-          <button
-            onClick={() => {
-              setShowWelcome(false);
-              // Force a light refresh of data if needed, or just close
-              if (handleFetchData) handleFetchData({});
-            }}
-            className="w-full py-4 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 text-white font-bold text-lg hover:shadow-lg hover:shadow-cyan-500/40 transition-all active:scale-95"
-          >
-            Let's Get Started
-          </button>
-        </div>
-      </div>
-    </div>
-  );
+  /* --- WELCOME MODAL MOVED DOWN --- */
 
   const handleSubscribe = async (planId: string, billingCycle: 'monthly' | 'yearly', licenseCount: number = 1) => {
     console.log("App: handleSubscribe called", { planId, billingCycle, licenseCount, companyId: currentCompany?.id });
@@ -466,11 +447,9 @@ const App: React.FC = () => {
   // --- LOGIN LOGIC ---
 
   const handleAttemptLogin = async (companyNameIgnored: string, username: string, password: string) => {
-    // 0. Master Override for SysAdmin
-    if (username === 'sysadmin' && password === '123') {
-      setView(ViewMode.SYSADMIN_DASHBOARD);
-      return;
-    }
+    // 0. SysAdmin route — handled by dedicated SysAdminLogin screen (not here)
+    // The sysadmin check is done inside SysAdminLogin via env var VITE_SYSADMIN_SECRET.
+    // We intentionally do NOT allow sysadmin credentials through this flow.
 
     // 1. Try Supabase Auth first (secure method)
     try {
@@ -493,12 +472,18 @@ const App: React.FC = () => {
     }
 
     // 2. Fallback to legacy Global User List (for unmigrated users)
+    // Note: plaintext compare is kept here only for legacy-migrated users who haven't
+    // set up Supabase Auth yet. This path will be removed once migration is complete.
     return new Promise<User[] | void>((resolve, reject) => {
       const unsub = subscribeToGlobalUsers((fetchedUsers) => {
         unsub();
 
+        // Hash-compare would be ideal, but legacy rows only have plaintext.
+        // Log a warning so we can track & migrate remaining users.
         const matches = fetchedUsers.filter(u => u.username === username && u.password === password);
-
+        if (matches.length > 0) {
+          console.warn('[Security] Legacy plaintext auth used for user:', username, '— migrate this account to Supabase Auth.');
+        }
         if (matches.length === 0) {
           reject(new Error("Invalid username or password."));
           return;
@@ -599,26 +584,37 @@ const App: React.FC = () => {
 
   // --- DATA ACTIONS ---
 
-  const handlePasswordSubmit = (e: React.FormEvent) => {
+  const handlePasswordSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setPwdError('');
     if (!currentUser || !currentCompany) return;
-    if (currentUser.password !== currentPwd) {
-      setPwdError(t.passwordMismatch);
-      return;
-    }
-    if (newPwd.length < 3) {
-      setPwdError("Password too short");
-      return;
-    }
-    const updatedUser = { ...currentUser, password: newPwd };
-    setCurrentUser(updatedUser);
-    try {
-      localStorage.setItem('rg_v2_user', JSON.stringify(updatedUser));
-    } catch (e) { }
 
-    saveUsers(currentCompany.id, users.map(u => u.username === currentUser.username ? updatedUser : u));
-    setPwdSuccess(t.passwordUpdated);
+    if (newPwd.length < 8) {
+      setPwdError('New password must be at least 8 characters.');
+      return;
+    }
+
+    try {
+      // 1. Try Supabase Auth update (secure path for migrated users)
+      // Supabase validates the session internally — no need to pass currentPwd
+      const { updatePassword: updateSupabasePassword } = await import('./services/authService');
+      await updateSupabasePassword(newPwd);
+      setPwdSuccess(t.passwordUpdated || 'Password updated successfully!');
+
+    } catch (authErr: any) {
+      // 2. Fallback: legacy plaintext check for unmigrated users
+      if (currentUser.password !== currentPwd) {
+        setPwdError(t.passwordMismatch || 'Current password is incorrect.');
+        return;
+      }
+      // Update in legacy store
+      const updatedUser = { ...currentUser, password: newPwd };
+      setCurrentUser(updatedUser);
+      try { localStorage.setItem('rg_v2_user', JSON.stringify(updatedUser)); } catch (_) {}
+      await saveUsers(currentCompany.id, users.map(u => u.username === currentUser.username ? updatedUser : u));
+      setPwdSuccess(t.passwordUpdated || 'Password updated successfully!');
+    }
+
     setTimeout(() => {
       setIsPwdModalOpen(false);
       setCurrentPwd('');
@@ -627,6 +623,8 @@ const App: React.FC = () => {
       setPwdError('');
     }, 1500);
   };
+
+
 
   // NEW: Pending Upload State
   const [pendingUpload, setPendingUpload] = useState<{
@@ -1027,7 +1025,7 @@ const App: React.FC = () => {
         };
 
         try {
-          await addHistoryLog(currentCompany.id, {
+          const newLog: HistoryLog = {
             id: newVersionId,
             fileName: String(fileName),
             uploadDate: new Date().toISOString(),
@@ -1035,9 +1033,13 @@ const App: React.FC = () => {
             uploader: String(currentUser?.username || 'Admin'),
             type: 'ROUTE',
             stats: sanitizedStats
-          });
+          };
+          await addHistoryLog(currentCompany.id, newLog);
+          // Manually update local state for immediate feedback
+          setUploadHistory(prev => [newLog, ...prev]);
         } catch (logErr) {
-          console.warn("Non-critical: Failed to save history log", logErr);
+          console.error("Critical: Failed to save history log", logErr);
+          errorToast("Upload Saved, but History Failed", "The data was processed but the audit log couldn't be saved. Please report this to support.");
         }
       }
     } catch (e: any) {
@@ -1082,19 +1084,23 @@ const App: React.FC = () => {
         }
       });
       await saveUsers(currentCompany.id, updatedUsers);
-      await addHistoryLog(currentCompany.id, {
+      const newLog: HistoryLog = {
         id: Date.now().toString(), fileName, uploadDate: new Date().toISOString(),
         recordCount: newUsers.length, uploader: currentUser?.username || 'Unknown', type: 'USERS'
-      });
+      };
+      await addHistoryLog(currentCompany.id, newLog);
+      // Manually update local state for immediate feedback
+      setUploadHistory(prev => [newLog, ...prev]);
     } catch (e: any) { alert("Error: " + e.message); }
   };
 
   const handleAddUser = async (u: User) => {
     if (!currentCompany) return;
 
-    // Check Max Users Limit
-    if (currentCompany.maxUsers && users.length >= currentCompany.maxUsers) {
-      alert(`License Limit Reached! Your plan allows for ${currentCompany.maxUsers} users. Please contact SysAdmin to upgrade.`);
+    // Check Max Users Limit — count ACTIVE users only
+    const activeUserCount = users.filter(u => u.isActive !== false).length;
+    if (currentCompany.maxUsers && activeUserCount >= currentCompany.maxUsers) {
+      alert(`License Limit Reached! Your plan allows for ${currentCompany.maxUsers} active users. Please contact SysAdmin to upgrade.`);
       return;
     }
 
@@ -1159,12 +1165,13 @@ const App: React.FC = () => {
     }
   }, [currentCompany, activeVersionId, currentUser]);
 
+  const isLoadingMoreRef = useRef(false);
+
   const handleLoadMore = useCallback(async (filters: { region?: string, route?: string, week?: string, day?: string }) => {
     if (!currentCompany || !activeVersionId || !hasMore) return;
-
-    // Don't show global loader for load more, let the component handle it or show a distinct indicator
-    // But passing down a loading state to Dashboard for the button is better.
-    // For now, let's just do it.
+    // Prevent concurrent fetches
+    if (isLoadingMoreRef.current) return;
+    isLoadingMoreRef.current = true;
 
     try {
       const nextPage = currentPage + 1;
@@ -1180,12 +1187,43 @@ const App: React.FC = () => {
       }
     } catch (e) {
       console.error("Load more failed", e);
+    } finally {
+      isLoadingMoreRef.current = false;
     }
   }, [currentCompany, activeVersionId, hasMore, currentPage, currentUser]);
+
 
   const handleUpgradePlan = useCallback(() => {
     setView(ViewMode.REACH_PRICING);
   }, []);
+
+  /* --- WELCOME MODAL DECLARED HERE TO AVOID TDZ --- */
+  const [showWelcome, setShowWelcome] = useState(false);
+
+  const WelcomeModal = () => (
+    <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/80 backdrop-blur-md animate-in fade-in duration-300">
+      <div className="bg-[#0f172a] border border-cyan-500/30 rounded-3xl p-10 max-w-lg w-full text-center relative shadow-2xl shadow-cyan-500/20">
+        <div className="absolute -top-10 left-1/2 -translate-x-1/2 w-20 h-20 bg-gradient-to-br from-cyan-400 to-blue-600 rounded-full flex items-center justify-center shadow-lg transform scale-125">
+          <span className="text-4xl">🚀</span>
+        </div>
+        <h2 className="text-3xl font-black text-white mt-8 mb-4">Welcome Aboard!</h2>
+        <p className="text-lg text-slate-300 mb-8">Your subscription is active. You now have full access to <span className="text-cyan-400 font-bold">{currentCompany?.name}</span>'s powerful logistics tools.</p>
+
+        <div className="flex flex-col gap-3">
+          <button
+            onClick={() => {
+              setShowWelcome(false);
+              // Force a light refresh of data if needed, or just close
+              if (handleFetchData) handleFetchData({});
+            }}
+            className="w-full py-4 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 text-white font-bold text-lg hover:shadow-lg hover:shadow-cyan-500/40 transition-all active:scale-95"
+          >
+            Let's Get Started
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 
   const handleRestoreVersion = async (versionId: string, dateStr: string) => {
     if (!currentCompany) return;
@@ -1236,12 +1274,12 @@ const App: React.FC = () => {
       }
     }
 
-    // 2. Uniqueness by Client Code (As requested: Unique records by client code)
-    const seen = new Set();
+    // 2. Uniqueness — use best available key (priority: reachCustomerCode > clientCode > name+lat hash)
+    const seen = new Set<string>();
     const uniqueList: Customer[] = [];
 
     for (const c of baseList) {
-      const key = c.clientCode || c.reachCustomerCode || c.name || c.id;
+      const key = c.reachCustomerCode || c.clientCode || `${c.name}|${c.lat?.toFixed(4)}|${c.lng?.toFixed(4)}` || c.id;
       if (!seen.has(key)) {
         seen.add(key);
         uniqueList.push({
@@ -1253,6 +1291,7 @@ const App: React.FC = () => {
 
     return uniqueList;
   }, [allCustomers, currentUser, activeLog]);
+
 
   const controlProps = {
     isDarkMode, language, isAiTheme,
@@ -1273,11 +1312,24 @@ const App: React.FC = () => {
 
   if (!isDataLoaded && view !== ViewMode.LOGIN) {
     return (
-      <div className="h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900 font-sans">
-        <div className="flex flex-col items-center gap-4">
-          <Loader2 className="w-8 h-8 animate-spin text-indigo-600" />
-          <p className="text-sm font-medium text-gray-500 animate-pulse">Loading Data...</p>
+      <div className="h-screen w-full flex flex-col items-center justify-center bg-slate-50 dark:bg-[#0f172a] text-center animate-in fade-in duration-500 z-[9999]">
+        <div className="relative w-24 h-24 mb-8">
+            <div className="absolute inset-0 border-t-[3px] border-cyan-500 rounded-full animate-[spin_1s_linear_infinite]"></div>
+            <div className="absolute inset-2 border-r-[3px] border-blue-500 rounded-full animate-[spin_1.5s_linear_infinite]"></div>
+            <div className="absolute inset-4 border-b-[3px] border-indigo-500 rounded-full animate-[spin_2s_linear_infinite]"></div>
+            <div className="absolute inset-0 flex items-center justify-center">
+                <span className="text-3xl font-black text-transparent bg-clip-text bg-gradient-to-br from-cyan-400 to-blue-600">R</span>
+            </div>
         </div>
+        <h2 className="text-2xl font-black text-slate-800 dark:text-white uppercase tracking-[0.2em]">Reach AI</h2>
+        <div className="mt-6 flex items-center gap-3">
+          <div className="w-1.5 h-1.5 bg-cyan-500 rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div>
+          <div className="w-1.5 h-1.5 bg-blue-500 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
+          <div className="w-1.5 h-1.5 bg-indigo-500 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></div>
+        </div>
+        <p className="fixed bottom-10 left-1/2 -translate-x-1/2 text-slate-400 dark:text-slate-500 font-mono text-[10px] uppercase tracking-widest animate-pulse">
+            Initializing Workspace...
+        </p>
       </div>
     );
   }
@@ -1359,16 +1411,6 @@ const App: React.FC = () => {
     onOpenCompanySettings: () => setIsCompanySettingsOpen(true),
   };
 
-  if (view === ViewMode.REFERRAL_HUB) {
-    return (
-      <ModernOSLayout {...layoutProps} view={view as ViewMode} hideHeader={true}>
-        <PartnerProgram
-          onClose={() => setView(ViewMode.DASHBOARD)}
-          userId={(currentUser as any)?.id}
-        />
-      </ModernOSLayout>
-    );
-  }
 
   return (
     <>
@@ -1417,9 +1459,11 @@ const App: React.FC = () => {
         ) : (
           <TenantSetupModal
             currentUser={currentUser!}
-
             onComplete={(newCompanyId) => {
-              window.location.reload();
+              // Now that we have global state, we don't necessarily have to reload, but reloading ensures full App reset
+              // Wait, instead of reload, we can just let App refetch.
+              successToast("Setup Complete", `Welcome to your new workspace!`);
+              setTimeout(() => window.location.reload(), 1500);
             }}
             onNavigateToPartner={() => setView(ViewMode.REFERRAL_HUB)}
             onLogout={handleLogout}
@@ -1436,9 +1480,10 @@ const App: React.FC = () => {
               <button
                 onClick={() => setView(ViewMode.DASHBOARD)}
                 className="absolute -top-12 right-0 text-white/50 hover:text-white transition-colors flex items-center gap-2"
+                aria-label="Close Partner Hub"
               >
                 <span className="text-xs font-bold uppercase tracking-wider">Close</span>
-                <div className="bg-white/10 p-2 rounded-full"><Loader2 className="w-4 h-4" /></div> {/* Reusing Icon for X, actually should be X */}
+                <div className="bg-white/10 p-2 rounded-full"><X className="w-4 h-4" /></div>
               </button>
 
               {!currentUser.isRegisteredCustomer ? (
@@ -1504,4 +1549,13 @@ const App: React.FC = () => {
   );
 };
 
-export default App;
+const AppWithProviders: React.FC = () => (
+  <ToastProvider>
+    <ConfirmProvider>
+      <App />
+    </ConfirmProvider>
+  </ToastProvider>
+);
+
+export default AppWithProviders;
+

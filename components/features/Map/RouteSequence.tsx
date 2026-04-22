@@ -1,9 +1,9 @@
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { TRANSLATIONS, DEFAULT_COMPANY_SETTINGS } from '../../../config/constants';
 import { Customer, RouteSummary, CompanySettings, NormalizedBranch } from '../../../types';
 import { optimizeRoute, calculateDistance, analyzeSameLocation, countNearbyCustomers, OptimizerConfig } from '../../../services/optimizer';
-import { supabase, fetchFilteredRoutes, fetchUniqueFilterData, fetchRoutePortfolioCount, fetchRouteCustomersNormalized, fetchCompanyRoutes } from '../../../services/supabase';
+import { supabase, fetchFilteredRoutes, fetchUniqueFilterData, fetchRoutePortfolioCount, fetchRouteCustomersNormalized, fetchCompanyRoutes, fetchFilterStats } from '../../../services/supabase';
 import MapVisualizer from '../../MapVisualizer';
 import ErrorBoundary from '../../ErrorBoundary';
 import {
@@ -31,6 +31,8 @@ interface RouteSequenceProps {
     // NEW: For branch-based access control
     userRole?: string;
     userBranchIds?: string[];
+    // NEW: Trigger refresh of cached stats after upload
+    lastUploadDate?: string;
 }
 
 const InfoTooltip = ({ content }: { content: string }) => (
@@ -136,7 +138,7 @@ const MultiSelect: React.FC<MultiSelectProps> = ({ title, options, selected, onC
                 onClick={() => !disabled && setIsOpen(!isOpen)}
                 className={`w-full bg-gray-50 dark:bg-gray-950 border ${isOpen ? 'border-brand-primary ring-1 ring-brand-primary' : 'border-gray-200 dark:border-gray-800'} rounded-xl py-2.5 sm:py-3 pl-10 pr-8 text-[10px] sm:text-xs font-bold text-left flex items-center justify-between outline-none transition-all text-gray-900 dark:text-white shadow-sm hover:border-gray-300 dark:hover:border-gray-700 ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
             >
-                <span className="truncate">{selected.includes('All') ? (title === 'All' ? placeholder : title) : `${selected.length} Selected`}</span>
+                <span className="truncate">{selected.includes('All') ? placeholder : `${selected.length} Selected`}</span>
                 <ChevronsUpDown className="w-3 h-3 text-muted" />
             </button>
 
@@ -173,7 +175,7 @@ const MultiSelect: React.FC<MultiSelectProps> = ({ title, options, selected, onC
     );
 };
 
-const RouteSequence: React.FC<RouteSequenceProps> = ({ companyId, activeVersionId, onBack, isDarkMode, language, settings, hideHeader = false, userRole, userBranchIds }) => {
+const RouteSequence: React.FC<RouteSequenceProps> = ({ companyId, activeVersionId, onBack, isDarkMode, language, settings, hideHeader = false, userRole, userBranchIds, lastUploadDate }) => {
     // Check if user is admin/manager (can see all data)
     const isAdmin = !userRole || ['ADMIN', 'MANAGER', 'SYSADMIN'].includes(userRole.toUpperCase());
 
@@ -234,6 +236,8 @@ const RouteSequence: React.FC<RouteSequenceProps> = ({ companyId, activeVersionI
         companyId: companyId || 'N/A'
     });
 
+    const [filterStats, setFilterStats] = useState<{ branches: Record<string, number>, routes: Record<string, number> }>({ branches: {}, routes: {} });
+
     // DEBUG: Check if data exists
     useEffect(() => {
         if (!companyId) return;
@@ -274,6 +278,21 @@ const RouteSequence: React.FC<RouteSequenceProps> = ({ companyId, activeVersionI
         checkData();
     }, [companyId]);
 
+    // NEW: Load filter counts (stats)
+    const prevUploadDate = useRef(lastUploadDate);
+    useEffect(() => {
+        if (!companyId) return;
+        const loadStats = async () => {
+            const isNewUpload = prevUploadDate.current !== lastUploadDate;
+            if (isNewUpload) {
+                prevUploadDate.current = lastUploadDate;
+            }
+            const stats = await fetchFilterStats(companyId, isNewUpload);
+            setFilterStats(stats);
+        };
+        loadStats();
+    }, [companyId, lastUploadDate]);
+
     // Initial Load - Branches (Direct Query to company_branches table)
     // NEW: Filter branches by user's assigned branches for non-admin users
     useEffect(() => {
@@ -301,12 +320,16 @@ const RouteSequence: React.FC<RouteSequenceProps> = ({ companyId, activeVersionI
                 // Map for dropdown
                 const branchOptions = branches.map(b => ({
                     val: b.name_en,
-                    count: 0 // Count per branch not strictly needed for UI select but nice
+                    count: filterStats.branches[b.name_en] || 0
                 }));
                 setAvailableRegions(branchOptions);
 
-                // Auto-select first branch if none selected
-                if (branchOptions.length > 0 && selectedRegions.length === 1 && selectedRegions[0] === 'All' && !localStorage.getItem('rg_dash_regions')) {
+                // Auto-select first branch if none selected or if userBranchIds force a change
+                const savedRegionsStr = localStorage.getItem('rg_dash_regions');
+                const savedRegions = savedRegionsStr ? JSON.parse(savedRegionsStr) : null;
+                const hasValidSavedRegion = savedRegions && savedRegions.some((r: string) => branchOptions.map(b => b.val).includes(r));
+
+                if (branchOptions.length > 0 && selectedRegions.length === 1 && selectedRegions[0] === 'All' && !hasValidSavedRegion) {
                     setSelectedRegions([branchOptions[0].val]);
                 }
             } catch (err) {
@@ -333,7 +356,7 @@ const RouteSequence: React.FC<RouteSequenceProps> = ({ companyId, activeVersionI
             // Map to format expected by MultiSelect { val, count }
             const mappedRoutes = data.map((r: any) => ({
                 val: r.routeName,
-                count: 0 // Count not provided by this function, but UI handles 0
+                count: filterStats.routes[r.routeName] || 0
             }));
 
             setAvailableRoutes(mappedRoutes);
@@ -345,34 +368,32 @@ const RouteSequence: React.FC<RouteSequenceProps> = ({ companyId, activeVersionI
         };
 
         loadRoutes();
-        loadRoutes();
     }, [companyId, selectedRegions]);
 
-    // Load unique weeks and days from database
+    // Load unique weeks and days from normalized route_visits table (COMBINED query for efficiency)
     useEffect(() => {
         if (!companyId) return;
 
         const loadWeeksAndDays = async () => {
-            console.log('[RouteSequence] Loading weeks and days for company:', companyId);
-
-            // Get weeks
+            // Both weeks and days fetched with company_id isolation to prevent cross-tenant bleed
             const { data: weeksData } = await supabase
-                .from('company_uploaded_data')
+                .from('route_visits')
                 .select('week_number')
-                .eq('company_id', companyId);
+                .eq('company_id', companyId);  // SECURITY: company isolation
 
-            const distinctWeeks = Array.from(new Set((weeksData || []).map(item => item.week_number).filter(Boolean).filter((w: string) => w !== 'NULL')));
-            console.log('[RouteSequence] Found weeks:', distinctWeeks);
+            const distinctWeeks = Array.from(new Set(
+                (weeksData || []).map(item => item.week_number).filter(Boolean).filter((w: string) => w !== 'NULL')
+            ));
             setAvailableWeeks(distinctWeeks.sort() as string[]);
 
-            // Get days
             const { data: daysData } = await supabase
-                .from('company_uploaded_data')
+                .from('route_visits')
                 .select('day_name')
-                .eq('company_id', companyId);
+                .eq('company_id', companyId);  // SECURITY: company isolation
 
-            const distinctDays = Array.from(new Set((daysData || []).map(item => item.day_name).filter(Boolean).filter((d: string) => d !== 'NULL')));
-            console.log('[RouteSequence] Found days:', distinctDays);
+            const distinctDays = Array.from(new Set(
+                (daysData || []).map(item => item.day_name).filter(Boolean).filter((d: string) => d !== 'NULL')
+            ));
             setAvailableDays(distinctDays as string[]);
         };
 
@@ -530,38 +551,33 @@ const RouteSequence: React.FC<RouteSequenceProps> = ({ companyId, activeVersionI
         return countNearbyCustomers(filteredCustomers, thresholdKm);
     }, [filteredCustomers, settings]);
 
-    const servingTimeMin = stats.totalStops * optimizerConfig.serviceTimeMin;
+    const servingTimeMin = (stats?.totalStops || 0) * (optimizerConfig?.serviceTimeMin || 20);
     const driveTimeMin = useMemo(() => {
         if (!summary) return 0;
-        // User Fix: Exclude the first leg (Branch -> 1st Stop) from drive time metrics if it exists?
-        // Or if Efficiency needs it, we adjust Efficiency separately.
-        // Let's keep driveTimeMin as ACTUAL total drive time (including commute) because that's what "Drive Time" usually means on a dashboard.
-        // We will adjust EFFICIENCY Score specifically.
         return Math.max(0, summary.totalTimeMin - servingTimeMin);
     }, [summary, servingTimeMin]);
 
     const efficiencyScore = useMemo(() => {
-        if (!summary || summary.totalTimeMin === 0) return 0;
+        if (!summary || !summary.totalTimeMin || summary.totalTimeMin === 0) return 0;
 
         // CUSTOMER REQUEST FIX: Calculate efficiency from First Visit, not Branch.
         // This means we exclude the time taken for the first leg (Branch -> Stop 1) from the Total Time denominator.
 
-        // 1. Identify First Leg Time
-        let commuteTime = 0;
-        if (summary.segments && summary.segments.length > 0) {
-            // First segment is typically Start -> First Node
-            const firstLeg = summary.segments[0];
-            // If start node was injected (Branch), then this is the commute.
-            // Check if fromId starts with 'branch-'
-            if (firstLeg.fromId && String(firstLeg.fromId).startsWith('branch-')) {
-                commuteTime = firstLeg.estimatedTimeMin;
-            }
+        // CUSTOMER REQUEST FIX: Efficiency peaks at an ideal 8-hour (480 min) shift.
+        // It calculates based on Total Time (Serving + Driving).
+        // If Total Time < 480: Efficiency decreases (under-utilized)
+        // If Total Time > 480: Efficiency decreases (over-utilized / overtime penalty)
+        const idealShiftMins = 480;
+        let efficiency = 0;
+
+        if (summary.totalTimeMin <= idealShiftMins) {
+            efficiency = (summary.totalTimeMin / idealShiftMins) * 100;
+        } else {
+            efficiency = (idealShiftMins / summary.totalTimeMin) * 100;
         }
 
-        const adjustedTotalTime = Math.max(1, summary.totalTimeMin - commuteTime);
-
-        return Math.min(100, Math.round((servingTimeMin / adjustedTotalTime) * 100));
-    }, [summary, servingTimeMin]);
+        return Math.min(100, Math.round(efficiency));
+    }, [summary]);
 
     const formatMins = (mins: number) => {
         if (mins < 60) return `${Math.round(mins)}m`;
@@ -678,29 +694,26 @@ const RouteSequence: React.FC<RouteSequenceProps> = ({ companyId, activeVersionI
                 </div>
             </div>
 
-            {/* DEBUG INFO - REMOVE AFTER FIXING */}
-            <div className="fixed bottom-4 right-4 bg-black/80 text-white p-3 rounded-lg text-[10px] z-[9999] border border-white/20 max-w-xs">
-                <p className="font-bold text-brand-primary mb-1 text-[12px]">DEBUG PANEL (v1.0.6)</p>
-                <p>Company: <span className="text-gray-400">{debugInfo.companyId}</span></p>
-                <p>Raw Rows (Backup): <span className="text-gray-400 font-mono">{debugInfo.rowCount}</span></p>
-                <p>Normalized Rows: <span className="text-blue-400 font-bold font-mono">{debugInfo.normalizedCount}</span></p>
-                <p>Route Visits: <span className="text-rose-400 font-bold font-mono">{debugInfo.routeVisitsCount}</span></p>
-                <p>Global (All Co): <span className="text-emerald-400 font-bold font-mono">{debugInfo.globalCount}</span></p>
-                {debugInfo.error && (
-                    <div className="mt-2 pt-2 border-t border-red-500/30 text-red-400">
-                        <p className="font-bold">RPC ERROR:</p>
-                        <p className="break-words">{debugInfo.error}</p>
-                    </div>
-                )}
-            </div>
+            {/* Debug panel hidden in production */}
 
             {!isExecuted ? (
-                <div className="flex-1 flex flex-col items-center justify-center p-8 text-center animate-in fade-in zoom-in duration-500">
-                    <div className="w-24 h-24 bg-gray-100 dark:bg-gray-800 rounded-full flex items-center justify-center mb-6">
-                        <ListFilter className="w-10 h-10 text-gray-400" />
+                <div className="flex-1 flex flex-col items-center justify-center p-8 text-center animate-in fade-in duration-700 h-[60vh]">
+                    <div className="relative mb-8 group">
+                        <div className="absolute inset-0 bg-brand-primary/20 blur-2xl rounded-full scale-150 group-hover:bg-brand-primary/40 transition-colors duration-700"></div>
+                        <div className="w-32 h-32 bg-gradient-to-br from-indigo-500/10 to-purple-500/10 border border-brand-primary/20 rounded-full flex flex-col items-center justify-center shadow-[0_0_50px_rgba(99,102,241,0.1)] backdrop-blur-sm relative z-10 transition-transform duration-500 group-hover:scale-110">
+                            <MapIcon className="w-12 h-12 text-brand-primary mb-2 opacity-80" />
+                            <Navigation className="w-6 h-6 text-cyan-400 absolute bottom-6 right-6" />
+                        </div>
                     </div>
-                    <h3 className="text-xl font-black text-gray-900 dark:text-white mb-2">Ready to Analyze</h3>
-                    <p className="text-gray-500 max-w-md">Please select your desired filters (Region, Route, Week, Day) above and click <span className="font-bold text-indigo-600">VIEW</span> to load the sequence data.</p>
+                    <h3 className="text-3xl font-black text-gray-900 dark:text-white mb-4 tracking-tighter">Sequence Intelligence</h3>
+                    <p className="text-gray-500 dark:text-gray-400 max-w-lg mb-8 leading-relaxed">
+                        Select your desired Region, Route, Week, and Day from the top controls, then click <span className="px-2 py-1 bg-brand-primary/10 text-brand-primary font-bold rounded-md uppercase tracking-wider text-xs shadow-sm mx-1">View</span> to decode and optimize travel paths.
+                    </p>
+                    {isAdmin && (
+                        <div className="flex items-center gap-2 text-xs font-bold text-slate-400 uppercase tracking-widest px-4 py-2 rounded-full border border-slate-200 dark:border-slate-800 bg-white/50 dark:bg-black/20">
+                            Use Admin Panel to upload new ETLS
+                        </div>
+                    )}
                 </div>
             ) : (
                 <div className="p-3 sm:p-8 space-y-6 sm:space-y-8 max-w-[1920px] mx-auto w-full animate-in fade-in duration-500">
@@ -786,7 +799,7 @@ const RouteSequence: React.FC<RouteSequenceProps> = ({ companyId, activeVersionI
                                     </div>
                                     <div className="flex justify-between items-start mb-4 relative z-10">
                                         <div className="p-3 bg-gray-800/50 rounded-2xl border border-gray-700/50 shadow-inner group-hover:shadow-lg group-hover:shadow-violet-500/10 transition-all duration-300"><Zap className="w-5 h-5 sm:w-6 sm:h-6 text-violet-500" /></div>
-                                        <InfoTooltip content="Ratio of productive serving time against the total working hours. Target > 85%." />
+                                        <InfoTooltip content="Route utilization score. Peaks at 100% for exactly 8 hours of work. Decreases for under-utilization (short shifts) and over-utilization (overtime)." />
                                     </div>
                                     <p className="text-2xl sm:text-3xl font-black text-white leading-none tracking-tight relative z-10">{efficiencyScore}%</p>
                                     <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mt-2 relative z-10">Efficiency</p>
@@ -931,7 +944,7 @@ const RouteSequence: React.FC<RouteSequenceProps> = ({ companyId, activeVersionI
                                             <div className="absolute left-[1.4rem] sm:left-[2.25rem] top-4 bottom-4 w-0.5 sm:w-1 bg-gradient-to-b from-brand-primary via-brand-primary/20 to-transparent opacity-20"></div>
                                             <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 sm:gap-x-12 gap-y-6 sm:gap-y-8">
                                                 {timelineRoute.map((stop, index) => {
-                                                    const isBranch = stop.id.startsWith('branch-');
+                                                    const isBranch = stop?.id?.startsWith('branch-') || false;
                                                     const isSelected = selectedCustomerId === stop.id;
                                                     const legStats = index > 0 && summary.segments[index - 1];
 

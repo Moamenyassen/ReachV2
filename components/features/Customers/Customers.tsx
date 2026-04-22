@@ -172,10 +172,14 @@ const Customers: React.FC<CustomersProps> = ({
                 <input
                     autoFocus={field === 'name'}
                     type="text"
-                    className={`w-full bg-slate-100 dark:bg-slate-700 border-none rounded px-2 py-1 text-xs focus:ring-2 focus:ring-indigo-500 ${width}`}
-                    value={(value as string | number) || ''}
+                    className={`w-full bg-slate-100 dark:bg-slate-700 border-indigo-500/50 rounded px-2 py-1 text-xs focus:ring-2 focus:ring-indigo-500 ${width}`}
+                    defaultValue={(value as string | number) || ''}
                     placeholder={placeholder}
-                    onChange={(e) => handleChange(field, e.target.value)}
+                    onChange={(e) => {
+                        // Debounce the state update slightly to avoid freezing on fast typing, 
+                        // or just rely on uncontrolled behavior until save.
+                        handleChange(field, e.target.value);
+                    }}
                     onKeyDown={(e) => handleKeyDown(e, customer)}
                 />
             );
@@ -194,6 +198,27 @@ const Customers: React.FC<CustomersProps> = ({
                 <h2 className="2xl font-black text-slate-800 dark:text-white mb-2">No Customers Found</h2>
                 <div className="flex gap-4 mt-8">
                     {onUpload && (<button onClick={onUpload} className="px-6 py-3 bg-indigo-600 text-white rounded-xl font-bold">Upload Data</button>)}
+                </div>
+            </div>
+        );
+    }
+
+    const hasNoAccess = !isAdmin && (!userBranchIds || userBranchIds.length === 0);
+
+    if (hasNoAccess) {
+        return (
+            <div className="h-full flex flex-col items-center justify-center p-8 text-center animate-in fade-in duration-500 bg-slate-50 dark:bg-[#0f172a]">
+                <div className="w-24 h-24 bg-rose-100 dark:bg-rose-900/30 rounded-full flex items-center justify-center mb-6 ring-1 ring-rose-500/20 shadow-2xl">
+                    <AlertTriangle className="w-10 h-10 text-rose-600 dark:text-rose-400" />
+                </div>
+                <h2 className="text-2xl font-black text-slate-800 dark:text-white mb-2">Access Restricted</h2>
+                <p className="text-slate-500 dark:text-slate-400 max-w-md mx-auto">
+                    Contact your system administrator to get branches assigned to your account. You currently do not have access to view any customer data.
+                </p>
+                <div className="mt-8">
+                    <button onClick={() => onNavigate(ViewMode.DASHBOARD)} className="px-6 py-3 bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-white rounded-xl font-bold hover:bg-slate-300 dark:hover:bg-slate-700 transition-colors">
+                        Return to Dashboard
+                    </button>
                 </div>
             </div>
         );
@@ -407,7 +432,6 @@ const Customers: React.FC<CustomersProps> = ({
                                     { label: 'Week', key: 'week', width: 'w-24' },
                                     { label: 'Added By', key: 'addedBy', width: 'w-32' },
                                     { label: 'Date', key: 'addedDate', width: 'w-32' },
-                                    { label: 'Info', key: 'data', width: 'w-24' },
                                 ].map(col => (
                                     <th
                                         key={col.key}
@@ -435,7 +459,7 @@ const Customers: React.FC<CustomersProps> = ({
                                         ${editingId === (customer.rowId || customer.id) ? 'bg-indigo-50/50 dark:bg-indigo-900/10' : ''}
                                         ${isMissingGps ? 'bg-rose-500/5 hover:bg-rose-500/10' : ''}
                                     `}
-                                        onClick={() => !editingId && onUpdateCustomer && handleStartEdit(customer)}
+                                        onClick={() => onUpdateCustomer && handleStartEdit(customer)}
                                     >
                                         <td className="px-4 py-2 font-mono text-slate-500">
                                             <div className="flex items-center gap-2" title={isMissingGps ? "Missing GPS Coordinates" : ""}>
@@ -508,16 +532,9 @@ const Customers: React.FC<CustomersProps> = ({
                                         <td className="px-4 py-2 text-slate-500 text-[10px] whitespace-nowrap">
                                             {customer.addedDate ? new Date(customer.addedDate).toLocaleDateString() : '-'}
                                         </td>
-                                        <td className="px-4 py-2 text-slate-500 text-[10px] max-w-[150px] truncate" title={JSON.stringify(customer.data || {})}>
-                                            {customer.data && Object.keys(customer.data).length > 0 ? (
-                                                <span className="bg-indigo-100 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 px-1.5 py-0.5 rounded border border-indigo-200 dark:border-indigo-800">
-                                                    {Object.keys(customer.data).length} fields
-                                                </span>
-                                            ) : '-'}
-                                        </td>
                                         <td className="px-4 py-2 text-right sticky right-0 bg-inherit shadow- [-10px_0_10px_-10px_rgba(0,0,0,0.1)]">
                                             {editingId === (customer.rowId || customer.id) ? (
-                                                <span className="text-[9px] uppercase tracking-wider text-emerald-500 font-bold bg-emerald-500/10 px-2 py-1 rounded">Save</span>
+                                                <span className="text-[9px] uppercase tracking-wider text-emerald-500 font-bold bg-emerald-500/10 px-2 py-1 rounded cursor-pointer hover:bg-emerald-500/20" onClick={(e) => { e.stopPropagation(); handleSave(customer); }}>Save</span>
                                             ) : (
                                                 <span className="text-[9px] text-slate-500 opacity-0 group-hover:opacity-100 transition-opacity">Edit</span>
                                             )}

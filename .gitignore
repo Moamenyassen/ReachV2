@@ -11,6 +11,19 @@ node_modules
 dist
 dist-ssr
 *.local
+.npm_cache
+.venv
+tsc_output.txt
+tsc_verification.txt
+
+# Env files (may contain secrets)
+.env
+.env.local
+server_py/.env
+
+# Claude Code per-machine settings and worktrees
+.claude/settings.local.json
+.claude/worktrees/
 
 # Editor directories and files
 .vscode/*

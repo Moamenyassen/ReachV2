@@ -4,7 +4,7 @@ import {
     LayoutGrid, Map as MapIcon, Zap, BarChart3, FileText,
     Crosshair, Crown, Database, Settings, LayoutTemplate,
     LogOut, ChevronLeft, Search, Bell, Wifi, Battery,
-    User, Calendar, Clock, Sun, Moon, Languages, KeyRound, Globe,
+    User, Clock, Sun, Moon, Languages, KeyRound, Globe,
     Users,      // Added Users
     UserCog,    // Added UserCog for User Management
     ClipboardList, // Added ClipboardList
@@ -12,7 +12,8 @@ import {
     CalendarDays,
     Megaphone,
     Sparkles,
-    Radar
+    Radar,
+    ShieldCheck
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -133,7 +134,7 @@ const SortableItem = ({ id, app, iconDims, textSize, controlProps, onClick, bran
 const UserMenu = ({
     currentUser, onLogout, controlProps, onToggleUiMode, setIsPwdModalOpen,
     iconSize, setIconSize, activeWidgets, toggleWidget, onOpenCompanySettings,
-    setView, t
+    setView, setIsHome, t
 }: any) => {
     const [isOpen, setIsOpen] = useState(false);
     const menuRef = useRef<HTMLDivElement>(null);
@@ -186,7 +187,7 @@ const UserMenu = ({
                         animate={{ opacity: 1, y: 0, scale: 1 }}
                         exit={{ opacity: 0, y: 10, scale: 0.95 }}
                         transition={{ duration: 0.2 }}
-                        className="absolute top-full right-0 mt-3 w-72 backdrop-blur-2xl border border-main rounded-2xl shadow-2xl overflow-hidden p-2 z-[10001] bg-panel text-main"
+                        className="absolute top-full right-0 mt-3 w-72 bg-white/95 dark:bg-slate-900/95 backdrop-blur-3xl border border-main rounded-2xl shadow-2xl overflow-hidden p-2 z-[10001] text-main"
                         dir={isRtl ? 'rtl' : 'ltr'}
                     >
                         <div className="space-y-1">
@@ -240,10 +241,36 @@ const UserMenu = ({
                                 <span className="text-sm font-medium">Change Password</span>
                             </button>
                             {(currentUser.role === UserRole.ADMIN) && (
-                                <button onClick={onOpenCompanySettings || controlProps.onOpenCompanySettings || (() => { })} className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition-colors hover:bg-white/10 text-main">
-                                    <Settings className="w-4 h-4 text-cyan-400" />
-                                    <span className="text-sm font-medium">Company Settings</span>
-                                </button>
+                                <>
+                                    <button onClick={onOpenCompanySettings || controlProps.onOpenCompanySettings || (() => { })} className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition-colors hover:bg-white/10 text-main">
+                                        <Settings className="w-4 h-4 text-cyan-400" />
+                                        <span className="text-sm font-medium">Company Settings</span>
+                                    </button>
+                                    <button 
+                                        onClick={() => {
+                                            setView(ViewMode.LICENSE_SUMMARY);
+                                            setIsHome(false);
+                                            setIsOpen(false);
+                                            localStorage.setItem(`modern_is_home_${currentUser?.id || 'guest'}`, 'false');
+                                        }} 
+                                        className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition-colors hover:bg-white/10 text-main"
+                                    >
+                                        <ShieldCheck className="w-4 h-4 text-indigo-400" />
+                                        <span className="text-sm font-medium">License Summary</span>
+                                    </button>
+                                    <button 
+                                        onClick={() => {
+                                            setView(ViewMode.PRICING);
+                                            setIsHome(false);
+                                            setIsOpen(false);
+                                            localStorage.setItem(`modern_is_home_${currentUser?.id || 'guest'}`, 'false');
+                                        }} 
+                                        className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition-colors hover:bg-white/10 text-main"
+                                    >
+                                        <Crown className="w-4 h-4 text-yellow-400" />
+                                        <span className="text-sm font-medium">Subscription Plans</span>
+                                    </button>
+                                </>
                             )}
                             <button onClick={onToggleUiMode} className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition-colors hover:bg-white/10 text-main">
                                 <LayoutTemplate className="w-4 h-4 text-violet-400" />
@@ -272,6 +299,8 @@ const ModernOSLayout: React.FC<ModernLayoutProps> = (props) => {
 
     // Get global brand theme
     const { theme, activePreset } = useBrandTheme();
+
+    const isRtl = controlProps.language === 'ar';
 
     // Keys for persistence
     const STORAGE_KEYS = {
@@ -341,7 +370,7 @@ const ModernOSLayout: React.FC<ModernLayoutProps> = (props) => {
             label: t.pricing,
             icon: Crown,
             color: 'from-yellow-400 to-amber-300',
-            enabled: currentUser.role === UserRole.ADMIN
+            enabled: false // Hidden from grid, moved to User Menu
         },
         {
             id: ViewMode.SYSADMIN_DASHBOARD,
@@ -358,10 +387,10 @@ const ModernOSLayout: React.FC<ModernLayoutProps> = (props) => {
             enabled: currentUser.role === UserRole.ADMIN
         },
         {
-            id: ViewMode.SCHEDULER,
-            label: t.calendar,
-            icon: Calendar,
-            color: 'from-teal-400 to-cyan-500',
+            id: ViewMode.ANALYZE_DATA,
+            label: "Analyze Own Data",
+            icon: BarChart3,
+            color: 'from-blue-500 to-indigo-600',
             enabled: true
         },
         {
@@ -384,8 +413,15 @@ const ModernOSLayout: React.FC<ModernLayoutProps> = (props) => {
             icon: Settings,
             color: 'from-slate-500 to-slate-600',
             enabled: currentUser.role === UserRole.ADMIN
+        },
+        {
+            id: ViewMode.LICENSE_SUMMARY,
+            label: isRtl ? 'ملخص التراخيص' : 'License Summary',
+            icon: ShieldCheck,
+            color: 'from-indigo-500 to-purple-600',
+            enabled: false // Hidden from grid, moved to User Menu
         }
-    ], [props.currentUser, props.currentCompany, controlProps.language]);
+    ], [props.currentUser, props.currentCompany, controlProps.language, isRtl]);
 
     const apps = React.useMemo(() => {
         if (!isLimbo) return allApps;
@@ -439,7 +475,22 @@ const ModernOSLayout: React.FC<ModernLayoutProps> = (props) => {
     const [appsOrder, setAppsOrder] = useState<string[]>(() => {
         const currentIds = apps.filter(a => a.enabled).map(a => a.id);
 
-        // 1. Check User Preferences (DB) First
+        // 1. PRIMARY: LocalStorage (always the freshest snapshot on this device;
+        //    the DB sync runs in the background and may lag behind local drag actions)
+        const savedLocal = localStorage.getItem(STORAGE_KEYS.APP_ORDER);
+        if (savedLocal) {
+            try {
+                const parsed = JSON.parse(savedLocal);
+                if (Array.isArray(parsed) && parsed.length > 0) {
+                    const currentIdSet = new Set(currentIds);
+                    const validSaved = parsed.filter((id: string) => currentIdSet.has(id as ViewMode));
+                    const missing = currentIds.filter(id => !new Set(validSaved).has(id));
+                    return [...validSaved, ...missing];
+                }
+            } catch {/* fall through */}
+        }
+
+        // 2. FALLBACK: cloud-stored user preferences (first visit on a new device)
         if (currentUser?.preferences?.dockLayout && currentUser.preferences.dockLayout.length > 0) {
             const savedOrder = currentUser.preferences.dockLayout;
             const currentIdSet = new Set(currentIds);
@@ -448,21 +499,12 @@ const ModernOSLayout: React.FC<ModernLayoutProps> = (props) => {
             return [...validSaved, ...missing];
         }
 
-        // 2. Fallback to Local Storage
-        const savedOrder = localStorage.getItem(STORAGE_KEYS.APP_ORDER);
-        if (savedOrder) {
-            try {
-                const parsedSavedOrder = JSON.parse(savedOrder);
-                const currentIdSet = new Set(currentIds);
-                const validSaved = parsedSavedOrder.filter((id: string) => currentIdSet.has(id as ViewMode));
-                const missing = currentIds.filter(id => !new Set(validSaved).has(id));
-                return [...validSaved, ...missing];
-            } catch (e) {
-                return currentIds;
-            }
-        }
         return currentIds;
     });
+
+    // Track if first render finished; avoid writing the initial value back to the DB
+    // (that race was clobbering just-saved preferences on reload).
+    const didMountRef = useRef(false);
 
     const toggleWidget = (widget: WidgetType) => {
         setActiveWidgets(prev => {
@@ -471,14 +513,19 @@ const ModernOSLayout: React.FC<ModernLayoutProps> = (props) => {
         });
     };
 
-    // Persistence Effects
-    // Persistence Effects (Local + DB)
+    // Persistence (Local + DB) — skip the first run so we don't clobber the
+    // just-loaded state with its own initial value. Triggers only after an
+    // actual user-driven change.
     useEffect(() => {
+        if (!didMountRef.current) {
+            didMountRef.current = true;
+            return;
+        }
+
         localStorage.setItem(STORAGE_KEYS.ICON_SIZE, iconSize);
         localStorage.setItem(STORAGE_KEYS.WIDGETS, JSON.stringify(activeWidgets));
         localStorage.setItem(STORAGE_KEYS.APP_ORDER, JSON.stringify(appsOrder));
 
-        // Save to DB (Debounced)
         const saveToDb = setTimeout(() => {
             if (currentUser && currentUser.username && currentUser.username !== 'guest') {
                 updateUserPreferences(currentUser.username, {
@@ -488,9 +535,27 @@ const ModernOSLayout: React.FC<ModernLayoutProps> = (props) => {
                     activeWidgets: activeWidgets,
                     isDarkMode: controlProps.isDarkMode,
                     language: controlProps.language,
-                }).catch(err => console.error("Failed to sync preferences", err));
+                })
+                    .then(() => {
+                        // Keep the cached user object in sync so a later login
+                        // pull cannot serve up a stale dockLayout.
+                        try {
+                            const cached = localStorage.getItem('rg_v2_user');
+                            if (cached) {
+                                const parsed = JSON.parse(cached);
+                                parsed.preferences = {
+                                    ...(parsed.preferences || {}),
+                                    dockLayout: appsOrder,
+                                    iconSize,
+                                    activeWidgets,
+                                };
+                                localStorage.setItem('rg_v2_user', JSON.stringify(parsed));
+                            }
+                        } catch {/* ignore */}
+                    })
+                    .catch(err => console.error('Failed to sync preferences', err));
             }
-        }, 1000); // 1.0s debounce
+        }, 1000);
 
         return () => clearTimeout(saveToDb);
     }, [iconSize, activeWidgets, appsOrder, controlProps.isDarkMode, controlProps.language, currentUser?.username]);
@@ -557,6 +622,10 @@ const ModernOSLayout: React.FC<ModernLayoutProps> = (props) => {
                 const oldIndex = items.indexOf(active.id);
                 const newIndex = items.indexOf(over.id);
                 const newOrder = arrayMove(items, oldIndex, newIndex);
+                
+                // Immediate local save for responsiveness
+                localStorage.setItem(STORAGE_KEYS.APP_ORDER, JSON.stringify(newOrder));
+                
                 return newOrder;
             });
         }
@@ -651,7 +720,7 @@ const ModernOSLayout: React.FC<ModernLayoutProps> = (props) => {
                                 <div className="flex items-center gap-4">
 
 
-                                    <UserMenu {...{ currentUser, onLogout, controlProps, onToggleUiMode, setIsPwdModalOpen, iconSize, setIconSize, activeWidgets, toggleWidget, onOpenCompanySettings: props.onOpenCompanySettings, setView, t }} />
+                                    <UserMenu {...{ currentUser, onLogout, controlProps, onToggleUiMode, setIsPwdModalOpen, iconSize, setIconSize, activeWidgets, toggleWidget, onOpenCompanySettings: props.onOpenCompanySettings, setView, setIsHome, t }} />
                                 </div>
                             </div>
 
@@ -677,8 +746,8 @@ const ModernOSLayout: React.FC<ModernLayoutProps> = (props) => {
                                                         <CloudSun className="w-8 h-8" />
                                                     </div>
                                                     <div>
-                                                        <div className="text-2xl font-bold">24°C</div>
-                                                        <div className="text-xs font-medium text-muted">Sunny, Jeddah</div>
+                                                        <div className="text-sm font-bold opacity-60">Forecast</div>
+                                                        <div className="text-xs font-medium text-muted">Live data not configured</div>
                                                     </div>
                                                 </motion.div>
                                             )}
@@ -831,7 +900,7 @@ const ModernOSLayout: React.FC<ModernLayoutProps> = (props) => {
                                 </div>
 
                                 <div className="flex items-center gap-3">
-                                    <UserMenu {...{ currentUser, onLogout, controlProps, onToggleUiMode, setIsPwdModalOpen, iconSize, setIconSize, activeWidgets, toggleWidget }} />
+                                    <UserMenu {...{ currentUser, onLogout, controlProps, onToggleUiMode, setIsPwdModalOpen, iconSize, setIconSize, activeWidgets, toggleWidget, onOpenCompanySettings: props.onOpenCompanySettings, setView, setIsHome, t }} />
                                 </div>
                             </div>
 
@@ -840,7 +909,6 @@ const ModernOSLayout: React.FC<ModernLayoutProps> = (props) => {
                                 ViewMode.CUSTOMERS,
                                 ViewMode.USER_MANAGEMENT,
                                 ViewMode.ADMIN_DASHBOARD,
-                                ViewMode.SCHEDULER,
                                 ViewMode.LEGACY_INSIGHTS
                             ].includes(view) ? 'overflow-hidden' : 'overflow-y-auto'} overflow-x-hidden relative custom-scrollbar`}>
                                 {props.children ? props.children : <AppContent {...props} />}

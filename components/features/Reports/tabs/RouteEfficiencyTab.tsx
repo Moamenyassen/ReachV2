@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { Truck, Map, Navigation, AlertCircle, Loader2 } from 'lucide-react';
+import { Loader2 } from 'lucide-react';
 import { RouteEfficiencyData } from '../types';
-import { SummaryCard, StatusBadge } from '../SharedComponents';
+import { fetchReportData, computeRouteEfficiency } from '../../../../services/reportService';
 
 interface RouteEfficiencyTabProps {
     companyId: string;
@@ -13,59 +13,41 @@ const RouteEfficiencyTab: React.FC<RouteEfficiencyTabProps> = ({ companyId, filt
     const [isLoading, setIsLoading] = useState(false);
 
     useEffect(() => {
-        const fetchData = async () => {
-            setIsLoading(true);
-            try {
-                const queryParams = new URLSearchParams({ company_id: companyId || '' });
-                // NEW: Add branchIds filter for restricted users
-                if (filters?.branchIds && filters.branchIds.length > 0) {
-                    queryParams.set('branch_ids', filters.branchIds.join(','));
+        if (!companyId) return;
+        setIsLoading(true);
+        fetchReportData(companyId, filters?.branchIds)
+            .then(raw => {
+                let rows = computeRouteEfficiency(raw);
+                if (filters?.region && filters.region !== 'All') {
+                    rows = rows.filter(r => r.branch_name === filters.region);
                 }
-                const res = await fetch(`http://localhost:5001/api/reports/route-efficiency?${queryParams}`);
-                if (res.ok) {
-                    let json = await res.json();
-                    if (filters.region && filters.region !== 'All') {
-                        json = json.filter((d: any) => d.branch_name === filters.region);
-                    }
-                    setData(json);
-                }
-            } catch (err) {
-                console.error(err);
-            } finally {
-                setIsLoading(false);
-            }
-        };
-        if (companyId) fetchData();
-    }, [companyId, filters]);
+                setData(rows);
+            })
+            .catch(console.error)
+            .finally(() => setIsLoading(false));
+    }, [companyId, filters?.region, filters?.branchIds?.join(',')]);
 
-    // Aggregations
-    const efficientRoutes = data.filter(d => d.total_clients > 80 && d.districts_covered < 5).length;
-    const underutilized = data.filter(d => d.total_clients < 30).length;
-    const optimizationNeeded = data.filter(d => d.total_clients < 50 || d.districts_covered > 8).length;
-    const avgClients = data.length ? Math.round(data.reduce((acc, curr) => acc + curr.total_clients, 0) / data.length) : 0;
-
-    const getEfficiencyStatus = (clients: number, districts: number) => {
-        if (clients > 80 && districts < 5) return 'green';
-        if (clients >= 50 && clients <= 80) return 'yellow';
-        if (districts >= 5 && districts <= 8) return 'yellow';
-        return 'red';
+    const getEfficiencyScore = (avgPerDay: number) => {
+        const totalMins = avgPerDay * 25;
+        if (totalMins === 0) return 0;
+        const ideal = 480;
+        const score = totalMins <= ideal ? (totalMins / ideal) * 100 : (ideal / totalMins) * 100;
+        return Math.min(100, Math.round(score));
     };
 
-    const getOptimizationFlag = (d: RouteEfficiencyData) => {
-        if (d.total_clients < 50) return "Low client count";
-        if (d.districts_covered > 8) return "Too spread out";
-        if (d.districts_covered === 1) return "Single district";
-        if (d.gps_coverage_percent < 50) return "No GPS data";
-        return "Optimized";
+    const getFlag = (score: number, avgPerDay: number) => {
+        const totalMins = avgPerDay * 25;
+        if (score >= 85) return 'Optimized';
+        if (totalMins < 400) return 'Under-utilized';
+        if (totalMins > 520) return 'Over-utilized';
+        return 'Needs Balancing';
     };
 
     return (
         <div className="space-y-6 animate-in fade-in duration-500">
             <div className="bg-gray-900 border-b border-gray-800 px-6 py-3">
-                <p className="text-sm text-gray-400">Route optimization insights - identify underutilized routes and geographic inefficiencies</p>
+                <p className="text-sm text-gray-400">Route optimization insights — identify underutilized routes and geographic inefficiencies</p>
             </div>
-
-
 
             <div className="bg-gray-900 rounded-lg border border-gray-800 overflow-hidden">
                 {isLoading ? (
@@ -80,33 +62,40 @@ const RouteEfficiencyTab: React.FC<RouteEfficiencyTabProps> = ({ companyId, filt
                                     <th className="px-6 py-4 text-left">Clients</th>
                                     <th className="px-6 py-4 text-left">Avg/Day</th>
                                     <th className="px-6 py-4 text-left">Districts</th>
-                                    <th className="px-6 py-4 text-left">GPS %</th>
+                                    <th className="px-6 py-4 text-left">Efficiency %</th>
                                     <th className="px-6 py-4 text-left">Users</th>
-                                    <th className="px-6 py-4 text-left">Status</th>
                                     <th className="px-6 py-4 text-left">Optimization</th>
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-gray-800">
+                                {data.length === 0 && (
+                                    <tr><td colSpan={8} className="px-6 py-8 text-center text-gray-500">No data available</td></tr>
+                                )}
                                 {data.map((row, i) => {
-                                    const status = getEfficiencyStatus(row.total_clients, row.districts_covered);
-                                    const flag = getOptimizationFlag(row);
+                                    const score = getEfficiencyScore(row.avg_clients_per_day);
+                                    const flag = getFlag(score, row.avg_clients_per_day);
+                                    const color = score >= 85 ? 'bg-emerald-500' : score >= 60 ? 'bg-yellow-500' : 'bg-rose-500';
                                     return (
-                                        <tr key={i} className="hover:bg-gray-850 transition-colors text-sm">
+                                        <tr key={i} className="hover:bg-white/5 transition-colors text-sm">
                                             <td className="px-6 py-4 font-medium text-white">{row.route_name}</td>
                                             <td className="px-6 py-4 text-gray-400">{row.branch_name}</td>
                                             <td className="px-6 py-4 text-gray-300">{row.total_clients}</td>
                                             <td className="px-6 py-4 text-gray-400">{row.avg_clients_per_day}</td>
                                             <td className="px-6 py-4 text-gray-400">{row.districts_covered}</td>
-                                            <td className="px-6 py-4 text-gray-400">{row.gps_coverage_percent}%</td>
+                                            <td className="px-6 py-4">
+                                                <div className="flex items-center gap-2">
+                                                    <div className="w-16 h-1.5 rounded-full bg-gray-800 overflow-hidden">
+                                                        <div className={`h-full ${color}`} style={{ width: `${score}%` }} />
+                                                    </div>
+                                                    <span className="text-gray-300 font-mono text-xs">{score}%</span>
+                                                </div>
+                                            </td>
                                             <td className="px-6 py-4 text-gray-400">{row.users_assigned}</td>
                                             <td className="px-6 py-4">
-                                                <div className={`w-3 h-3 rounded-full ${status === 'green' ? 'bg-emerald-500' : status === 'yellow' ? 'bg-yellow-500' : 'bg-rose-500'}`} />
-                                            </td>
-                                            <td className="px-6 py-4">
-                                                <span className={`text-xs ${flag === 'Optimized' ? 'text-gray-500' : 'text-blue-400'}`}>{flag}</span>
+                                                <span className={`text-xs ${flag === 'Optimized' ? 'text-emerald-500' : 'text-blue-400'}`}>{flag}</span>
                                             </td>
                                         </tr>
-                                    )
+                                    );
                                 })}
                             </tbody>
                         </table>

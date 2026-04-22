@@ -14,10 +14,11 @@ import {
     AdminDashboard,
     Customers,
     UserManagement,
-    Calendar,
     PartnerProgram,
-    ScannerV2
+    ScannerV2,
+    AnalyzeDataModule
 } from './index';
+import LicenseSummary from './admin/LicenseSummary';
 import { DEFAULT_COMPANY_SETTINGS } from '../config/constants';
 import { addCustomerFromScanner } from '../services/supabase';
 
@@ -42,8 +43,7 @@ export interface AppContentProps {
     hasMore: boolean;
     isFetchingRoutes: boolean;
     isFullDataLoaded: boolean;
-    // availableRoutes?: string[];
-    currentFilters?: { region?: string, route?: string, week?: string, day?: string }; // Passed from App
+    currentFilters?: { region?: string, route?: string, week?: string, day?: string };
 
 
     // Admin Handlers
@@ -129,14 +129,27 @@ const AppContent: React.FC<AppContentProps> = (props) => {
         const Icon = icon;
 
         return (
-            <div className={`fixed top-4 right-24 z-[90] flex items-center gap-2 pointer-events-none md:pointer-events-auto animate-in fade-in slide-in-from-top-4 duration-700 ${props.hideHeader ? 'mr-12' : ''}`}>
-                <div className={`px-4 py-1.5 rounded-full ${color} text-white text-xs font-black uppercase tracking-widest shadow-lg shadow-black/20 flex items-center gap-2 border border-white/10 backdrop-blur-md`}>
-                    <Icon className="w-3.5 h-3.5 fill-current" />
-                    {name}
+            <div className={`fixed top-20 right-4 md:top-4 md:right-24 z-[90] flex items-center gap-2 pointer-events-none md:pointer-events-auto animate-in fade-in slide-in-from-top-4 duration-700 ${props.hideHeader ? 'mr-12' : ''}`}>
+                <div className={`px-3 md:px-4 py-1 sm:py-1.5 rounded-full ${color} text-white font-black uppercase shadow-lg shadow-black/20 flex items-center gap-2 border border-white/10 backdrop-blur-md`}>
+                    <Icon className="w-3 h-3 md:w-3.5 md:h-3.5 fill-current" />
+                    <span className="text-[10px] md:text-xs tracking-widest">{name}</span>
+
                 </div>
             </div>
         );
     };
+
+    // Deterministic ticket number for the License Request screen based on user properties
+    const ticketNumber = React.useMemo(() => {
+        const str = currentUser ? `${currentUser.username}-${currentUser.email}` : 'guest';
+        let hash = 0;
+        for (let i = 0; i < str.length; i++) {
+            hash = ((hash << 5) - hash) + str.charCodeAt(i);
+            hash |= 0;
+        }
+        return Math.abs(hash) % 9000 + 1000;
+    }, [currentUser]);
+
 
     const isLimbo = React.useMemo(() => {
         if (!currentUser) return false;
@@ -209,7 +222,7 @@ const AppContent: React.FC<AppContentProps> = (props) => {
                         <CheckCircle2 className="w-12 h-12 text-cyan-400" />
                     </div>
                     <h2 className="text-4xl font-black text-main mb-2 uppercase tracking-tighter">Request Received</h2>
-                    <p className="text-brand-primary font-bold tracking-widest text-xs uppercase mb-6">Create Ticket #{Math.floor(Math.random() * 1000) + 4000}</p>
+                    <p className="text-brand-primary font-bold tracking-widest text-xs uppercase mb-6">Create Ticket #{ticketNumber}</p>
 
                     <div className="max-w-md border border-main rounded-2xl p-6 glass-panel mb-8">
                         <p className="text-muted leading-relaxed text-sm">
@@ -257,7 +270,7 @@ const AppContent: React.FC<AppContentProps> = (props) => {
             )}
 
             {!isLimbo && view === ViewMode.LEGACY_INSIGHTS && <Insights currentUser={currentUser} currentCompany={currentCompany} allCustomers={allCustomers} userList={users} uploadHistory={uploadHistory} onNavigate={setView} onLogout={onLogout} hideHeader={props.hideHeader} {...controlProps} />}
-            {!isLimbo && view === ViewMode.DASHBOARD && <RouteSequence onBack={() => setView(ViewMode.LEGACY_INSIGHTS)} settings={currentCompany?.settings || DEFAULT_COMPANY_SETTINGS} companyId={currentCompany?.id} activeVersionId={activeVersionId} userRole={currentUser?.role} userBranchIds={currentUser?.branchIds} {...controlProps} hideHeader={props.hideHeader} />}
+            {!isLimbo && view === ViewMode.DASHBOARD && <RouteSequence onBack={() => setView(ViewMode.LEGACY_INSIGHTS)} settings={currentCompany?.settings || DEFAULT_COMPANY_SETTINGS} companyId={currentCompany?.id} activeVersionId={activeVersionId} userRole={currentUser?.role} userBranchIds={currentUser?.branchIds} lastUploadDate={uploadHistory?.[0]?.uploadDate} {...controlProps} hideHeader={props.hideHeader} />}
             {!isLimbo && view === ViewMode.FULL_SUMMARY && <DetailedReports currentUser={currentUser} allCustomers={accessibleCustomers} uploadHistory={uploadHistory} onBack={() => setView(ViewMode.LEGACY_INSIGHTS)} {...controlProps} hideHeader={props.hideHeader} currentFilters={props.currentFilters} />}
             {!isLimbo && view === ViewMode.AI_SUGGESTIONS && <AIOptimizer customers={accessibleCustomers} onBack={() => setView(ViewMode.LEGACY_INSIGHTS)} {...controlProps} hideHeader={props.hideHeader} companyId={currentCompany?.id} userBranchIds={currentUser?.branchIds} userRole={currentUser?.role} />}
             {!isLimbo && view === ViewMode.MARKET_SCANNER && <MarketScanner existingCustomers={accessibleCustomers} onBack={() => setView(ViewMode.LEGACY_INSIGHTS)} settings={currentCompany?.settings || DEFAULT_COMPANY_SETTINGS} maxScannerCap={currentCompany?.maxScannerCap} {...controlProps} hideHeader={props.hideHeader} />}
@@ -329,16 +342,6 @@ const AppContent: React.FC<AppContentProps> = (props) => {
                     hideHeader={props.hideHeader}
                 />
             )}
-            {view === ViewMode.SCHEDULER && (
-                <Calendar
-                    currentUser={currentUser}
-                    users={users}
-                    allCustomers={allCustomers}
-                    onNavigate={setView}
-                    hideHeader={props.hideHeader}
-                    isDarkMode={controlProps.isDarkMode}
-                />
-            )}
             {!isLimbo && view === ViewMode.SCANNER_V2 && (
                 <ScannerV2
                     onBack={() => setView(ViewMode.LEGACY_INSIGHTS)}
@@ -354,6 +357,32 @@ const AppContent: React.FC<AppContentProps> = (props) => {
 
 
 
+            {!isLimbo && view === ViewMode.ANALYZE_DATA && (
+                <AnalyzeDataModule 
+                    companyId={currentCompany?.id || ''} 
+                    userId={currentUser?.id || ''} 
+                />
+            )}
+
+            {view === ViewMode.REFERRAL_HUB && (
+                <PartnerProgram
+                    onClose={() => setView(ViewMode.LEGACY_INSIGHTS)}
+                    userId={currentUser?.id}
+                />
+            )}
+
+            {view === ViewMode.LICENSE_SUMMARY && (
+                <LicenseSummary
+                    currentUser={currentUser}
+                    currentCompany={currentCompany}
+                    users={users}
+                    allCustomers={allCustomers}
+                    availableRoutes={availableRoutes}
+                    onNavigate={setView}
+                    isDarkMode={controlProps.isDarkMode}
+                    language={controlProps.language}
+                />
+            )}
         </>
     );
 };
