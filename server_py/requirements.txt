@@ -2,8 +2,11 @@ fastapi
 uvicorn
 pandas
 openpyxl
-google-generativeai
+pdfplumber
+google-genai
 python-dotenv
 pydantic
 supabase
 python-multipart
+PyJWT>=2.8.0
+cryptography>=42.0

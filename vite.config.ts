@@ -7,7 +7,7 @@ export default defineConfig(({ mode }) => {
     return {
       cacheDir: '/tmp/vite-reach-cache',
       server: {
-        port: 3000,
+        port: parseInt(env.PORT || '3000'),
         host: '0.0.0.0',
       },
       plugins: [react()],
@@ -17,7 +17,7 @@ export default defineConfig(({ mode }) => {
       },
       resolve: {
         alias: {
-          '@': path.resolve(__dirname, '.'),
+          '@': path.resolve(__dirname, './src'),
         }
       }
     };

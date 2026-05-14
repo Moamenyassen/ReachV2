@@ -10,11 +10,19 @@ View your app in AI Studio: https://ai.studio/apps/drive/1Nc5pldH0yWLlk-CeDDdt1T
 
 ## Run Locally
 
-**Prerequisites:**  Node.js
+**Prerequisites:** Node.js + Python 3
 
 
 1. Install dependencies:
    `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
+
+2. Set the `GEMINI_API_KEY` (Gemini API key):
+   - Frontend: [.env.local](.env.local)
+   - Backend: `server_py/.env`
+
+3. Start the backend API (required for the Analyzer chat/analyze endpoints):
+   `python3 -m pip install -r server_py/requirements.txt`
+   `python3 -m uvicorn server_py.main:app --port 8000 --reload`
+
+4. Run the app:
    `npm run dev`

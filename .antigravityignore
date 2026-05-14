@@ -1,0 +1,65 @@
+# Reduce indexing/context bloat for Antigravity-style agents.
+# REACH_APP_DOCUMENTATION.md is the single source of truth — read that instead.
+
+# Dependencies / build outputs
+node_modules/
+server/node_modules/
+dist/
+dist-ssr/
+
+# Local env / secrets
+.env
+.env.local
+server_py/.env
+
+# VCS / editor / OS noise
+.git/
+.vscode/
+.idea/
+.DS_Store
+
+# Python / caches
+.venv/
+__pycache__/
+*.pyc
+
+# Large local data
+db/
+scripts/
+e2e/
+
+# -------------------------------------------------------
+# OVERSIZED SOURCE FILES — described in REACH_APP_DOCUMENTATION.md
+# These files are too large for context (4500+ lines each).
+# Ask Claude to read them on demand if needed.
+# -------------------------------------------------------
+
+# 4555 lines — all Supabase DB query functions
+src/services/supabase.ts
+
+# 1908 lines — Route map V2 component
+src/components/features/Map/RouteSequenceV2.tsx
+
+# 1590 lines — Company settings modal
+src/components/CompanySettingsModal.tsx
+
+# 1561 lines — Root app state and auth
+src/App.tsx
+
+# 1361 lines — SysAdmin license requests
+src/components/admin/SysAdmin/SysAdminLicenseRequests.tsx
+
+# 1339 lines — SysAdmin leads management
+src/components/admin/SysAdmin/SysAdminLeads.tsx
+
+# 1322 lines — Modern OS-style layout shell
+src/components/layouts/ModernOSLayout.tsx
+
+# 1044 lines — CSV/ETL upload pipeline
+src/services/etlService.ts
+
+# 1040 lines — Tenant setup onboarding modal
+src/components/TenantSetupModal.tsx
+
+# Lock file — never useful for AI context
+package-lock.json

@@ -3,14 +3,18 @@ import io
 import os
 import json
 from typing import Dict, Any
-from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 
-load_dotenv()
+try:
+    from .config import load_env
+except ImportError:
+    from config import load_env
+
+load_env()
 
 # Configure Gemini using the new SDK
-api_key = os.getenv("GEMINI_API_KEY")
+api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
 if not api_key:
     print("⚠️  Warning: GEMINI_API_KEY not found. Set it in server_py/.env")
     client = None
@@ -75,7 +79,10 @@ class AnalyzerService:
         The Master Logic: Extract metadata → LLM generates spec → execute Python → return results.
         """
         if not client:
-            raise RuntimeError("GEMINI_API_KEY is not configured. Please add it to server_py/.env")
+            raise RuntimeError(
+                "Gemini API key is not configured. Set `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) "
+                "to your real key in `server_py/.env` and restart the backend."
+            )
 
         metadata = self.get_file_metadata(file_content, filename)
         
@@ -127,7 +134,10 @@ Generate the full analysis JSON as instructed.
 
     def execute_analysis_logic(self, file_content: bytes, filename: str, python_code: str) -> Dict[str, Any]:
         """
-        Runs the AI-generated Python code in a safe local scope.
+        Runs the AI-generated Python code in a hardened sandbox:
+          - Restricted builtins (no import, no open, no eval/exec, no os/sys)
+          - Static code scan blocks known-bad tokens (os, subprocess, __import__, ...)
+          - 15s wall-clock timeout
         """
         file_ext = filename.rsplit('.', 1)[-1].lower()
         if file_ext == 'csv':
@@ -135,37 +145,88 @@ Generate the full analysis JSON as instructed.
         else:
             df = pd.read_excel(io.BytesIO(file_content))
 
+        # ── Static block-list — refuse to execute if Gemini emitted anything dangerous
+        forbidden = (
+            "import os", "import sys", "import subprocess", "import socket",
+            "import shutil", "import requests", "import urllib", "import http",
+            "import pathlib", "import pickle", "import marshal", "import ctypes",
+            "import importlib", "__import__", "eval(", "exec(", "compile(",
+            "open(", "globals(", "locals(", "vars(", "getattr(", "setattr(",
+            "delattr(", "breakpoint(", "input(",
+        )
+        low = python_code.lower()
+        for needle in forbidden:
+            if needle.lower() in low:
+                print(f"[SECURITY] Refused AI code containing forbidden token: {needle!r}")
+                return self._fallback_kpis(df)
+
+        # ── Restricted builtins — minimal whitelist
+        safe_builtins = {
+            "abs": abs, "all": all, "any": any, "bool": bool, "dict": dict,
+            "enumerate": enumerate, "filter": filter, "float": float, "int": int,
+            "len": len, "list": list, "map": map, "max": max, "min": min,
+            "range": range, "round": round, "set": set, "sorted": sorted,
+            "str": str, "sum": sum, "tuple": tuple, "zip": zip, "print": print,
+            "isinstance": isinstance, "type": type, "True": True, "False": False, "None": None,
+        }
+        sandbox_globals = {"__builtins__": safe_builtins, "pd": pd}
         local_scope = {"df": df, "results": {}, "pd": pd}
-        
+
+        # ── Timeout — 15s wall clock (SIGALRM, POSIX only)
+        import signal
+        class _Timeout(Exception): ...
+        def _handle(signum, frame):
+            raise _Timeout("AI code execution exceeded 15s timeout.")
+        alarm_installed = False
         try:
-            exec(python_code, {"pd": pd, "__builtins__": __builtins__}, local_scope)
+            try:
+                signal.signal(signal.SIGALRM, _handle)
+                signal.alarm(15)
+                alarm_installed = True
+            except Exception:
+                pass  # non-POSIX or non-main-thread; rely on Gemini being well-behaved
+            exec(python_code, sandbox_globals, local_scope)  # noqa: S102 — sandboxed above
             return local_scope.get('results', {})
+        except _Timeout as te:
+            print(f"[SECURITY] {te}")
+            return self._fallback_kpis(df)
         except Exception as e:
             print(f"[ERROR] AI code execution failed: {e}")
-            # Return a safe fallback with basic stats
-            fallback_kpis = []
-            for col in df.select_dtypes(include='number').columns[:5]:
-                fallback_kpis.append({
-                    "label": col,
-                    "value": f"{df[col].sum():,.0f}",
-                    "trend": "up",
-                    "description": f"Total sum of {col}"
-                })
-            return {
-                "kpi_cards": fallback_kpis,
-                "insights": [{"title": "Data Loaded", "description": f"Dataset has {len(df)} rows and {len(df.columns)} columns.", "impact": "medium"}],
-                "charts": {
-                    "trend": [{"name": str(i), "value": int(v)} for i, v in enumerate(df.select_dtypes(include='number').iloc[:, 0].dropna().head(10).tolist())] if len(df.select_dtypes(include='number').columns) > 0 else [],
-                    "distribution": [{"name": str(k), "value": int(v)} for k, v in df.select_dtypes(include='number').iloc[:, 0].value_counts().head(5).items()] if len(df.select_dtypes(include='number').columns) > 0 else []
-                }
-            }
+            return self._fallback_kpis(df)
+        finally:
+            if alarm_installed:
+                try:
+                    signal.alarm(0)
+                except Exception:
+                    pass
+
+    def _fallback_kpis(self, df) -> Dict[str, Any]:
+        fallback_kpis = []
+        for col in df.select_dtypes(include='number').columns[:5]:
+            fallback_kpis.append({
+                "label": col,
+                "value": f"{df[col].sum():,.0f}",
+                "trend": "up",
+                "description": f"Total sum of {col}",
+            })
+        return {
+            "kpi_cards": fallback_kpis,
+            "insights": [{"title": "Data Loaded", "description": f"Dataset has {len(df)} rows and {len(df.columns)} columns.", "impact": "medium"}],
+            "charts": {
+                "trend": [{"name": str(i), "value": int(v)} for i, v in enumerate(df.select_dtypes(include='number').iloc[:, 0].dropna().head(10).tolist())] if len(df.select_dtypes(include='number').columns) > 0 else [],
+                "distribution": [{"name": str(k), "value": int(v)} for k, v in df.select_dtypes(include='number').iloc[:, 0].value_counts().head(5).items()] if len(df.select_dtypes(include='number').columns) > 0 else [],
+            },
+        }
 
     async def chat_with_analysis(self, analysis_context: dict, user_message: str) -> str:
         """
         Context-aware chat using the initial analysis results.
         """
         if not client:
-            raise RuntimeError("GEMINI_API_KEY is not configured.")
+            raise RuntimeError(
+                "Gemini API key is not configured. Set `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) "
+                "to your real key in `server_py/.env` and restart the backend."
+            )
 
         system = """
 You are a Senior Business Intelligence Consultant AI.

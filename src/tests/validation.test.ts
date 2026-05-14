@@ -20,7 +20,7 @@ import {
     validateLoginForm,
     validateRegistrationForm,
     validateCustomerData
-} from '../../utils/validation';
+} from '../utils/validation';
 
 describe('Email Validation', () => {
     it('should validate correct emails', () => {

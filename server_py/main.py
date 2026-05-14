@@ -1,37 +1,73 @@
 import os
 import json
+import time
 import uuid
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+import traceback
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, Dict, Any
 from supabase import create_client, Client
-from dotenv import load_dotenv
-from analyzer_service import analyzer_service
+from google.genai import errors as genai_errors
+try:
+    from .config import load_env, gemini_key_configured, gemini_key_placeholder
+except ImportError:
+    from config import load_env, gemini_key_configured, gemini_key_placeholder
 
-load_dotenv()
-
-app = FastAPI(title="Reach Analyzer API", version="2.0.0")
-
-# CORS — allow the Vite dev server
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# Supabase Setup (graceful fallback if not configured)
-SUPABASE_URL = os.getenv("SUPABASE_URL", "https://mpkfvaccnsucdmxxtosu.supabase.co")
-SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY") or \
-    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1wa2Z2YWNjbnN1Y2RteHh0b3N1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njc3NzQ3ODQsImV4cCI6MjA4MzM1MDc4NH0.dlfstdHCzWJF-CMCa93J4RsZvm2nwhqnE5hvZ_8pkEo"
+load_env()
 
 try:
-    supabase: Optional[Client] = create_client(SUPABASE_URL, SUPABASE_KEY)
-except Exception as e:
-    print(f"⚠️  Supabase connection failed: {e}. Results will not be cached.")
-    supabase = None
+    # Package import (supports `python -m uvicorn server_py.main:app`)
+    from .analyzer_service import analyzer_service
+    from .data_assist import router as data_assist_router
+    from .excel_etl import router as excel_etl_router
+    from .sysadmin_routes import router as sysadmin_router
+    from .security import (
+        require_user, AuthContext, log_gemini_usage, log_system_error,
+    )
+except ImportError:
+    # Script import (supports `cd server_py && python -m uvicorn main:app`)
+    from analyzer_service import analyzer_service
+    from data_assist import router as data_assist_router
+    from excel_etl import router as excel_etl_router
+    from sysadmin_routes import router as sysadmin_router
+    from security import (
+        require_user, AuthContext, log_gemini_usage, log_system_error,
+    )
+
+app = FastAPI(title="Reach Analyzer API", version="2.0.0")
+app.include_router(data_assist_router)
+app.include_router(excel_etl_router)
+app.include_router(sysadmin_router)
+
+# CORS — strict allowlist. Override via env CORS_ALLOWED_ORIGINS (comma-separated).
+_default_origins = "http://localhost:3001,http://localhost:5173,http://127.0.0.1:3001"
+_allowed_origins = [
+    o.strip() for o in os.getenv("CORS_ALLOWED_ORIGINS", _default_origins).split(",") if o.strip()
+]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_allowed_origins,
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-Company-Id"],
+)
+
+# Supabase Setup — fail closed if not configured. No hardcoded fallback.
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY")
+
+supabase: Optional[Client] = None
+if SUPABASE_URL and SUPABASE_KEY:
+    try:
+        supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+    except Exception as e:
+        print(f"⚠️  Supabase connection failed: {e}. Results will not be cached.")
+else:
+    print("⚠️  SUPABASE_URL / SUPABASE_KEY not set — DB writes disabled.")
+
+# Make supabase + config available to all routers via app.state
+app.state.supabase = supabase
 
 
 class ChatRequest(BaseModel):
@@ -46,79 +82,126 @@ def health_check():
     return {
         "status": "healthy",
         "service": "Reach Analyzer API v2",
-        "gemini_configured": bool(os.getenv("GEMINI_API_KEY")),
+        "gemini_configured": gemini_key_configured(),
+        "gemini_key_placeholder": gemini_key_placeholder(),
         "supabase_connected": supabase is not None,
     }
 
 
+MAX_UPLOAD_BYTES = 25 * 1024 * 1024  # 25 MB hard cap
+ALLOWED_UPLOAD_EXT = {"csv", "xlsx", "xls"}
+
+
+def _resolve_company_id(sb: Optional[Client], auth_user_id: str) -> Optional[str]:
+    """Look up the caller's company_id from app_users — never trust client form data."""
+    if not sb:
+        return None
+    try:
+        res = sb.table("app_users").select("company_id").eq("auth_user_id", auth_user_id).single().execute()
+        return (res.data or {}).get("company_id") if hasattr(res, "data") else None
+    except Exception:
+        return None
+
+
 @app.post("/analyze")
 async def analyze_file(
+    request: Request,
     file: UploadFile = File(...),
-    user_id: str = Form(...),
-    company_id: str = Form(...)
+    ctx: AuthContext = Depends(require_user),
 ):
-    """
-    Main endpoint: receives a CSV/Excel file, orchestrates AI analysis,
-    caches results to Supabase, and returns structured insights.
-    """
+    """Authenticated. user_id and company_id are derived from JWT, never form."""
+    started = time.time()
+    auth_user_id = ctx.auth_user_id
+    company_id = _resolve_company_id(supabase, auth_user_id)
+
+    # Validate file
+    filename = file.filename or "upload.csv"
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    if ext not in ALLOWED_UPLOAD_EXT:
+        raise HTTPException(status_code=415, detail=f"Unsupported file type: .{ext}")
+
     try:
         content = await file.read()
-        filename = file.filename or "upload.csv"
+        if len(content) > MAX_UPLOAD_BYTES:
+            raise HTTPException(status_code=413, detail="File exceeds 25 MB limit.")
+
         analysis_id = str(uuid.uuid4())
+        analysis_data = await analyzer_service.generate_analysis(content, filename, company_id or "unknown")
 
-        # Run AI Analysis
-        analysis_data = await analyzer_service.generate_analysis(content, filename, company_id)
-
-        # Persist to Supabase (non-blocking failure)
         if supabase:
             try:
-                db_data = {
+                supabase.table("user_analyses").insert({
                     "id": analysis_id,
-                    "user_id": user_id,
+                    "user_id": auth_user_id,
                     "company_id": company_id,
                     "file_name": filename,
-                    "metadata": analysis_data.get('metadata', {}),
+                    "metadata": analysis_data.get("metadata", {}),
                     "last_results": analysis_data,
-                    "status": "completed"
-                }
-                supabase.table("user_analyses").insert(db_data).execute()
+                    "status": "completed",
+                }).execute()
             except Exception as db_err:
                 print(f"[WARN] DB insert failed (results still returned): {db_err}")
 
-        return {
-            "analysis_id": analysis_id,
-            "results": {
-                **analysis_data,
-                "analysis_id": analysis_id
-            }
-        }
+        log_gemini_usage(
+            supabase, company_id=company_id, user_id=auth_user_id,
+            surface="analyzer", model="gemini-2.0-flash",
+            duration_ms=int((time.time() - started) * 1000), status_val="success",
+        )
 
+        return {"analysis_id": analysis_id, "results": {**analysis_data, "analysis_id": analysis_id}}
+
+    except HTTPException:
+        raise
     except RuntimeError as e:
-        # Config errors (missing API key etc.)
+        log_system_error(supabase, source="backend.analyze", message=str(e),
+                         severity="warning", company_id=company_id, user_id=auth_user_id,
+                         request_path="/analyze")
         raise HTTPException(status_code=503, detail=str(e))
+    except genai_errors.APIError as e:
+        code = 502
+        try:
+            code = int(getattr(e, "code", code))
+        except Exception:
+            pass
+        log_gemini_usage(supabase, company_id=company_id, user_id=auth_user_id,
+                         surface="analyzer", model="gemini-2.0-flash",
+                         duration_ms=int((time.time() - started) * 1000),
+                         status_val="failure", error_message=str(e))
+        raise HTTPException(status_code=code, detail=getattr(e, "message", str(e)))
     except ValueError as e:
-        # File parsing errors
         raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:
+        log_system_error(supabase, source="backend.analyze", message=str(e),
+                         severity="error", company_id=company_id, user_id=auth_user_id,
+                         stack_trace=traceback.format_exc(), request_path="/analyze")
         print(f"[ERROR] Analysis failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
+        raise HTTPException(status_code=500, detail="Analysis failed.")
 
 
 @app.post("/chat")
-async def chat_with_data(req: ChatRequest):
-    """
-    Context-aware chat endpoint. Uses previously stored analysis or
-    client-supplied context to answer follow-up questions.
-    """
+async def chat_with_data(
+    req: ChatRequest,
+    request: Request,
+    ctx: AuthContext = Depends(require_user),
+):
+    """Authenticated. Caller can only fetch analyses tied to their own company."""
+    started = time.time()
+    auth_user_id = ctx.auth_user_id
+    company_id = _resolve_company_id(supabase, auth_user_id)
+
     try:
         context = req.context
 
-        # If client didn't supply context, fetch from DB
         if not context and supabase:
             try:
-                result = supabase.table("user_analyses").select("last_results").eq("id", req.analysis_id).single().execute()
-                if result.data:
-                    context = result.data.get("last_results", {})
+                # Enforce ownership at query time
+                q = supabase.table("user_analyses").select("last_results,company_id").eq("id", req.analysis_id).single().execute()
+                row = q.data or {}
+                if row.get("company_id") and company_id and row["company_id"] != company_id:
+                    raise HTTPException(status_code=403, detail="Analysis belongs to another tenant.")
+                context = row.get("last_results", {})
+            except HTTPException:
+                raise
             except Exception as e:
                 print(f"[WARN] Could not fetch analysis from DB: {e}")
 
@@ -126,13 +209,31 @@ async def chat_with_data(req: ChatRequest):
             context = {}
 
         answer = await analyzer_service.chat_with_analysis(context, req.message)
+
+        log_gemini_usage(
+            supabase, company_id=company_id, user_id=auth_user_id,
+            surface="chat", model="gemini-2.0-flash",
+            duration_ms=int((time.time() - started) * 1000), status_val="success",
+        )
         return {"answer": answer}
 
+    except HTTPException:
+        raise
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e))
+    except genai_errors.APIError as e:
+        code = 502
+        try:
+            code = int(getattr(e, "code", code))
+        except Exception:
+            pass
+        raise HTTPException(status_code=code, detail=getattr(e, "message", str(e)))
     except Exception as e:
+        log_system_error(supabase, source="backend.chat", message=str(e),
+                         severity="error", company_id=company_id, user_id=auth_user_id,
+                         stack_trace=traceback.format_exc(), request_path="/chat")
         print(f"[ERROR] Chat failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Chat failed.")
 
 
 if __name__ == "__main__":

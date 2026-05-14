@@ -2,10 +2,17 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "reach-dev",
+      "name": "Reach Frontend (Vite)",
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev"],
-      "port": 3000
+      "port": 3000,
+      "autoPort": true
+    },
+    {
+      "name": "Reach Backend (FastAPI)",
+      "runtimeExecutable": "/Users/moamen/Desktop/ReachV2/.venv/bin/python3",
+      "runtimeArgs": ["-m", "uvicorn", "server_py.main:app", "--host", "0.0.0.0", "--port", "8000"],
+      "port": 8000
     }
   ]
 }

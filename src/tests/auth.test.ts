@@ -21,7 +21,7 @@ const mockRpc = vi.fn();
 const mockFrom = vi.fn();
 
 // Mock the supabase module
-vi.mock('../../services/supabase', () => ({
+vi.mock('../services/supabase', () => ({
     supabase: {
         auth: {
             signInWithPassword: mockSignInWithPassword,
@@ -87,7 +87,7 @@ describe('Authentication Service', () => {
             });
 
             // Import module with mocks in place
-            const { signIn } = await import('../../services/authService');
+            const { signIn } = await import('../services/authService');
             const result = await signIn('test@example.com', 'password123');
 
             expect(result.username).toBe('test@example.com');
@@ -103,7 +103,7 @@ describe('Authentication Service', () => {
                 error: { message: 'Invalid login credentials' }
             });
 
-            const { signIn } = await import('../../services/authService');
+            const { signIn } = await import('../services/authService');
 
             await expect(signIn('wrong@example.com', 'wrongpass'))
                 .rejects.toThrow('Invalid login credentials');
@@ -135,7 +135,7 @@ describe('Authentication Service', () => {
 
             mockSignOut.mockResolvedValue({ error: null });
 
-            const { signIn } = await import('../../services/authService');
+            const { signIn } = await import('../services/authService');
 
             await expect(signIn('inactive@example.com', 'password123'))
                 .rejects.toThrow('Account is deactivated');
@@ -146,7 +146,7 @@ describe('Authentication Service', () => {
         it('should sign out and clear localStorage', async () => {
             mockSignOut.mockResolvedValue({ error: null });
 
-            const { signOut } = await import('../../services/authService');
+            const { signOut } = await import('../services/authService');
             await signOut();
 
             expect(mockSignOut).toHaveBeenCalled();
@@ -180,7 +180,7 @@ describe('Authentication Service', () => {
                 error: null
             });
 
-            const { signUp } = await import('../../services/authService');
+            const { signUp } = await import('../services/authService');
             const result = await signUp('new@example.com', 'newpassword', {
                 firstName: 'John',
                 lastName: 'Doe'
@@ -202,7 +202,7 @@ describe('Authentication Service', () => {
                 error: null
             });
 
-            const { signUp } = await import('../../services/authService');
+            const { signUp } = await import('../services/authService');
             const result = await signUp('confirm@example.com', 'password');
 
             expect(result.needsEmailConfirmation).toBe(true);
@@ -217,7 +217,7 @@ describe('Authentication Service', () => {
                 error: null
             });
 
-            const { updatePassword } = await import('../../services/authService');
+            const { updatePassword } = await import('../services/authService');
             await updatePassword('newSecurePassword123');
 
             expect(mockUpdateUser).toHaveBeenCalledWith({
@@ -233,7 +233,7 @@ describe('Authentication Service', () => {
                 error: null
             });
 
-            const { resetPassword } = await import('../../services/authService');
+            const { resetPassword } = await import('../services/authService');
             await resetPassword('forgot@example.com');
 
             expect(mockResetPasswordForEmail).toHaveBeenCalledWith(
