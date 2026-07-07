@@ -1605,12 +1605,13 @@ export const forceDeleteCompany = async (companyId: string) => {
     if (logError) console.warn("Failed to delete logs (non-fatal):", logError.message);
 
     // 5. Finally Delete Company
-    const { data: deletedCompany, error } = await supabase.from('companies').delete().eq('id', companyId).select();
+    const { error } = await supabase.from('companies').delete().eq('id', companyId);
     if (error) throw new Error("Failed to delete company: " + error.message);
 
-    // Verify rows were actually deleted (catches RLS blocking silently)
-    if (!deletedCompany || deletedCompany.length === 0) {
-        throw new Error("Delete operation returned no rows - company may not exist or access is denied. Please check Supabase RLS policies.");
+    // Verify it was actually deleted by checking if it still exists
+    const { data: exists, error: checkError } = await supabase.from('companies').select('id').eq('id', companyId).maybeSingle();
+    if (!checkError && exists) {
+        throw new Error("Failed to delete company: Delete operation was denied by database security rules. Please check Supabase RLS policies.");
     }
 };
 

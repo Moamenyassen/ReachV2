@@ -1143,4 +1143,6 @@ Limits enforced in:
 
 | 2026-07-07 | fix: add PATCH and DELETE to CORS allowed methods in main.py | `server_py/main.py` |
 
+| 2026-07-07 | fix: resolve false-positive company deletion error by checking existence instead of delete select row output | `src/services/supabase.ts` |
+
 *Last updated: 2026-07-07*
