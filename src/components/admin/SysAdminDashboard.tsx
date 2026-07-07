@@ -157,9 +157,9 @@ const SysAdminDashboard: React.FC<SysAdminDashboardProps> = ({ onLogout }) => {
         {
             id: 'SYSTEM', label: 'System', icon: Cog,
             tabs: [
+                { id: 'TEAM',       label: 'Users',    icon: UserCog,      requires: 'manage_sysadmins' },
                 { id: 'SYSTEM_LOG', label: 'Logs',     icon: FileWarning,  requires: 'view_audit_log' },
                 { id: 'SECURITY',   label: 'Security', icon: ShieldCheck },
-                { id: 'TEAM',       label: 'Team',     icon: UserCog,      requires: 'manage_sysadmins' },
             ],
         },
     ];

@@ -80,11 +80,11 @@ const SysAdminTeam: React.FC<Props> = ({ currentRole, currentSysadminId }) => {
         <div className="space-y-6">
             <PageHeader
                 icon={<UserCog className="w-5 h-5 text-indigo-400" />}
-                title="SysAdmin Team"
+                title="System Users"
                 subtitle="Manage who has access to the System Core and what they can do"
                 actions={
                     <button onClick={() => setShowInvite(true)} className={BTN.primary}>
-                        <Plus className="w-4 h-4" /> Invite sysadmin
+                        <Plus className="w-4 h-4" /> Add system user
                     </button>
                 }
             />
@@ -97,8 +97,8 @@ const SysAdminTeam: React.FC<Props> = ({ currentRole, currentSysadminId }) => {
                 {!loading && members.length === 0 && (
                     <EmptyState
                         icon={<UserCog />}
-                        title="No sysadmins yet"
-                        description="Seed the first owner via the migration_sysadmin_security_v1.sql INSERT, then come back here to invite teammates."
+                        title="No system users yet"
+                        description="Seed the first owner via the migration_system_users.sql INSERT, then come back here to add teammates."
                     />
                 )}
                 {members.length > 0 && (
@@ -205,6 +205,7 @@ const InviteModal: React.FC<{
 }> = ({ onClose, onDone, onError, defaults }) => {
     const [email, setEmail] = useState('');
     const [name, setName] = useState('');
+    const [password, setPassword] = useState('');
     const [role, setRole] = useState<SysAdminRole>('admin');
     const [overrides, setOverrides] = useState<Permissions>({});
     const [busy, setBusy] = useState(false);
@@ -215,17 +216,17 @@ const InviteModal: React.FC<{
     const submit = async () => {
         setBusy(true);
         try {
-            await sysadminApi.teamInvite(email.trim(), name.trim(), role, Object.keys(overrides).length ? overrides : undefined);
-            onDone(`Invited ${name || email}.`);
+            await sysadminApi.teamInvite(email.trim(), name.trim(), role, password.trim() || undefined, Object.keys(overrides).length ? overrides : undefined);
+            onDone(`Created system user ${name || email}.`);
         } catch (e: any) {
-            onError(e?.message || 'Invite failed');
+            onError(e?.message || 'Creation failed');
         } finally {
             setBusy(false);
         }
     };
 
     return (
-        <SysModal title="Invite a sysadmin" subtitle="The user must already have a Supabase Auth account (signed up or invited)." onClose={onClose}>
+        <SysModal title="Add a System User" subtitle="Create a new administrator or support user immediately." onClose={onClose}>
             <div className="space-y-4 p-5">
                 <div>
                     <label className="text-xs text-slate-400 font-bold uppercase tracking-wider mb-1 block">Email</label>
@@ -240,6 +241,13 @@ const InviteModal: React.FC<{
                 <div>
                     <label className="text-xs text-slate-400 font-bold uppercase tracking-wider mb-1 block">Display name</label>
                     <input value={name} onChange={e => setName(e.target.value)} className={INPUT_CLS} placeholder="Full name" required />
+                </div>
+                <div>
+                    <label className="text-xs text-slate-400 font-bold uppercase tracking-wider mb-1 block">Password</label>
+                    <input
+                        type="password" value={password} onChange={e => setPassword(e.target.value)}
+                        className={INPUT_CLS} placeholder="Enter login password" required
+                    />
                 </div>
                 <div>
                     <label className="text-xs text-slate-400 font-bold uppercase tracking-wider mb-1 block">Role</label>
@@ -259,8 +267,8 @@ const InviteModal: React.FC<{
             </div>
             <ModalFooter>
                 <button onClick={onClose} className={BTN.secondary}>Cancel</button>
-                <button onClick={submit} disabled={busy || !email || !name} className={BTN.primary}>
-                    {busy ? 'Inviting…' : 'Invite'}
+                <button onClick={submit} disabled={busy || !email || !name || !password} className={BTN.primary}>
+                    {busy ? 'Creating…' : 'Create User'}
                 </button>
             </ModalFooter>
         </SysModal>

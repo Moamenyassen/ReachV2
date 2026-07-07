@@ -1137,4 +1137,6 @@ Limits enforced in:
 
 | 2026-07-07 | feat: custom sysadmin authentication and local jwt secret fallback | `ROADMAP_GEMINI.md`, `db/migration_system_users.sql`, `server_py/security.py`, `server_py/sysadmin_routes.py`, `src/App.tsx`, `src/components/admin/SysAdmin/SysAdminObservability.tsx`, `src/components/admin/SysAdminLogin.tsx`, `src/components/features/Map/RouteSequenceV2.tsx`, `src/services/sysadminApi.ts` |
 
+| 2026-07-07 | feat: make Users the first tab in System section, rename to Users, and support direct creation with passwords | `src/components/admin/SysAdmin/SysAdminTeam.tsx`, `src/components/admin/SysAdminDashboard.tsx`, `src/services/sysadminApi.ts` |
+
 *Last updated: 2026-07-07*

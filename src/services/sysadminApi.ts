@@ -119,8 +119,8 @@ export const sysadminApi = {
 
     // Team management
     teamList: () => get<{ rows: TeamMember[]; role_defaults: Record<SysAdminRole, Permissions> }>('/sysadmin/team'),
-    teamInvite: (email: string, displayName: string, role: SysAdminRole, permissions?: Permissions) =>
-        post('/sysadmin/team/invite', { email, display_name: displayName, role, permissions }),
+    teamInvite: (email: string, displayName: string, role: SysAdminRole, password?: string, permissions?: Permissions) =>
+        post('/sysadmin/team/invite', { email, display_name: displayName, role, password, permissions }),
     teamUpdate: (sysadminId: string, body: { role?: SysAdminRole; permissions?: Permissions; is_active?: boolean; mfa_required?: boolean; display_name?: string }) =>
         request_('PATCH', `/sysadmin/team/${sysadminId}`, body),
     teamDelete: (sysadminId: string) => request_('DELETE', `/sysadmin/team/${sysadminId}`),
