@@ -13,7 +13,6 @@ import {
     Activity, AlertTriangle, BarChart3, Ban, CheckCircle, CircleSlash, FileWarning,
     LogOut, RefreshCw, ScanSearch, Shield, ShieldCheck, Unlock, Upload, Users, Zap,
 } from 'lucide-react';
-import { supabase } from '../../../services/supabase';
 import { sysadminApi } from '../../../services/sysadminApi';
 import {
     BTN, EmptyState, INPUT_CLS, PageHeader, StatCard, StatusBadge, SysCard, TABLE_CLS,
@@ -57,12 +56,8 @@ export const SysAdminApiUsage: React.FC = () => {
     const [days, setDays] = useState(30);
     const { data, loading, err, refresh } = useDataLoader(
         async () => {
-            const r = await supabase.from('gemini_usage_logs')
-                .select('*')
-                .gte('created_at', new Date(Date.now() - days * 86400000).toISOString())
-                .order('created_at', { ascending: false })
-                .limit(2000);
-            return (r.data || []) as any[];
+            const r = await sysadminApi.geminiUsage(days);
+            return (r.rows || []) as any[];
         },
         [days]
     );
@@ -173,12 +168,8 @@ export const SysAdminScannerUsage: React.FC = () => {
     const [days, setDays] = useState(30);
     const { data: rows, loading, err, refresh } = useDataLoader(
         async () => {
-            const r = await supabase.from('market_scan_logs')
-                .select('*')
-                .gte('created_at', new Date(Date.now() - days * 86400000).toISOString())
-                .order('created_at', { ascending: false })
-                .limit(2000);
-            return (r.data || []) as any[];
+            const r = await sysadminApi.scanUsage(days);
+            return (r.rows || []) as any[];
         },
         [days]
     );
@@ -260,12 +251,9 @@ export const SysAdminUploadAudit: React.FC = () => {
     const [days, setDays] = useState(30);
     const { data: rows, loading, err, refresh } = useDataLoader(
         async () => {
-            const r = await supabase.from('route_versions')
-                .select('id,company_id,uploaded_at,filename,row_count,status,tag')
-                .gte('uploaded_at', new Date(Date.now() - days * 86400000).toISOString())
-                .order('uploaded_at', { ascending: false })
-                .limit(500);
-            return (r.data || []) as any[];
+            const r = await sysadminApi.routeVersions();
+            const cutoff = new Date(Date.now() - days * 86400000);
+            return (r.rows || []).filter((x: any) => new Date(x.uploaded_at) >= cutoff) as any[];
         },
         [days]
     );
@@ -614,19 +602,15 @@ export const SysAdminEnforcement: React.FC = () => {
 export const SysAdminSecurityCenter: React.FC = () => {
     const sysadmins = useDataLoader(
         async () => {
-            const r = await supabase.from('sysadmins').select('*').order('created_at', { ascending: false });
-            return (r.data || []) as any[];
+            const r = await sysadminApi.teamList();
+            return (r.rows || []) as any[];
         },
         []
     );
     const attempts = useDataLoader(
         async () => {
-            const r = await supabase.from('sysadmin_login_attempts')
-                .select('*')
-                .gte('created_at', new Date(Date.now() - 7 * 86400000).toISOString())
-                .order('created_at', { ascending: false })
-                .limit(200);
-            return (r.data || []) as any[];
+            const r = await sysadminApi.attempts();
+            return (r.rows || []) as any[];
         },
         []
     );

@@ -47,6 +47,7 @@ import {
   updateUserPreferences,
   updateSupabaseHeaders
 } from './services/supabase';
+import { sysadminApi } from './services/sysadminApi';
 
 // ETL Service for normalized table uploads
 import {
@@ -1424,7 +1425,7 @@ const App: React.FC = () => {
   }
 
   if (view === ViewMode.SYSADMIN_DASHBOARD) {
-    return <SysAdminDashboard onLogout={() => setView(ViewMode.LOGIN)} />;
+    return <SysAdminDashboard onLogout={() => { sysadminApi.logout(); setView(ViewMode.LOGIN); }} />;
   }
 
   if (isValidatingSession) {

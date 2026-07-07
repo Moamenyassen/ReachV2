@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
 import { ShieldCheck, Lock, ArrowRight, AlertTriangle, Eye, EyeOff, Mail } from 'lucide-react';
-import { supabase } from '../../services/supabase';
 import { sysadminApi } from '../../services/sysadminApi';
 
 interface SysAdminLoginProps {
@@ -21,24 +20,9 @@ const SysAdminLogin: React.FC<SysAdminLoginProps> = ({ onLoginSuccess, onBack, i
         setError('');
         setBusy(true);
         try {
-            // 1) Authenticate with Supabase Auth — bcrypt-hashed, rate-limited,
-            //    MFA-capable, password-reset-capable — all out of the box.
-            const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
-            if (signInError) throw new Error(signInError.message);
-
-            // 2) Verify on the backend that this user is in `public.sysadmins`.
-            //    The backend checks the JWT signature AND the sysadmins row.
-            try {
-                const v = await sysadminApi.verify();
-                if (!v.is_sysadmin) throw new Error('Account is not a sysadmin.');
-            } catch (verr: any) {
-                // Roll back the sign-in so this account isn't left logged in as a tenant user.
-                await supabase.auth.signOut();
-                throw new Error(verr?.message?.includes('429')
-                    ? 'Too many attempts. Locked for 15 minutes.'
-                    : 'This account is not authorized as a sysadmin.');
-            }
-
+            // Authenticate directly with the FastAPI backend against system_users table
+            const res = await sysadminApi.login(email, password);
+            if (!res.token) throw new Error('Authentication failed - no token returned.');
             onLoginSuccess();
         } catch (err: any) {
             setError(err?.message || 'Authentication failed.');

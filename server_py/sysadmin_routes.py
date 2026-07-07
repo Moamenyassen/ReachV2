@@ -5,6 +5,8 @@ Mounted under /sysadmin/* in main.py.
 """
 from __future__ import annotations
 
+import os
+import jwt
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
@@ -48,9 +50,9 @@ def verify_sysadmin(request: Request, ctx: AuthContext = Depends(require_user)):
 
     try:
         res = (
-            sb.table("sysadmins")
+            sb.table("system_users")
             .select("id,display_name,is_active,mfa_required")
-            .eq("auth_user_id", ctx.auth_user_id)
+            .eq("id", ctx.auth_user_id)
             .single()
             .execute()
         )
@@ -66,10 +68,10 @@ def verify_sysadmin(request: Request, ctx: AuthContext = Depends(require_user)):
 
     # Best-effort update of last_login_at / ip
     try:
-        sb.table("sysadmins").update({
+        sb.table("system_users").update({
             "last_login_at": datetime.now(timezone.utc).isoformat(),
             "last_login_ip": ip,
-        }).eq("auth_user_id", ctx.auth_user_id).execute()
+        }).eq("id", ctx.auth_user_id).execute()
     except Exception:
         pass
 
@@ -81,9 +83,9 @@ def verify_sysadmin(request: Request, ctx: AuthContext = Depends(require_user)):
     # Fetch full role + permissions for the client UI to gate its tabs
     try:
         full = (
-            sb.table("sysadmins")
+            sb.table("system_users")
             .select("id,display_name,role,permissions,mfa_required")
-            .eq("auth_user_id", ctx.auth_user_id)
+            .eq("id", ctx.auth_user_id)
             .single()
             .execute()
         ).data or {}
@@ -341,14 +343,15 @@ def list_team(
 ):
     sb = request.app.state.supabase
     res = (
-        sb.table("sysadmins")
-        .select("id,auth_user_id,display_name,email,role,permissions,is_active,mfa_required,last_login_at,last_login_ip,created_at,invited_by,invited_at")
+        sb.table("system_users")
+        .select("id,display_name,email,role,permissions,is_active,mfa_required,last_login_at,last_login_ip,created_at,invited_by,invited_at")
         .order("created_at", desc=False)
         .execute()
     )
     rows = res.data or []
     # Enrich with effective permissions
     for r in rows:
+        r["auth_user_id"] = r["id"] # client compatibility
         r["effective_permissions"] = _resolve_permissions(r.get("role"), r.get("permissions") or {})
     return {"rows": rows, "role_defaults": _ROLE_DEFAULTS}
 
@@ -357,6 +360,7 @@ class InviteRequest(BaseModel):
     email: str
     display_name: str
     role: str
+    password: Optional[str] = "Moamen224!"
     permissions: Optional[Dict[str, bool]] = None
 
 
@@ -372,45 +376,23 @@ def invite_sysadmin(
     if body.role == "owner":
         raise HTTPException(status_code=400, detail="Cannot invite as owner. Transfer ownership instead.")
 
-    # The user must already exist in Supabase Auth. We don't create auth users
-    # from the backend with the anon key — that requires service role + admin API.
-    # Find their auth.users.id.
     try:
-        au = sb.table("app_users").select("auth_user_id").eq("email", body.email).limit(1).execute()
-        auth_user_id = None
-        if au.data and au.data[0].get("auth_user_id"):
-            auth_user_id = au.data[0]["auth_user_id"]
-        if not auth_user_id:
-            # Fall back: try via admin API if available
-            try:
-                u = sb.auth.admin.list_users()
-                for x in (u or []):
-                    if getattr(x, "email", None) == body.email:
-                        auth_user_id = str(x.id)
-                        break
-            except Exception:
-                pass
-        if not auth_user_id:
-            raise HTTPException(
-                status_code=400,
-                detail="No Supabase Auth user found for this email. Create the account first via Supabase Auth (invite or signup), then retry.",
-            )
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Lookup failed: {e}")
-
-    try:
-        sb.table("sysadmins").insert({
-            "auth_user_id": auth_user_id,
-            "display_name": body.display_name,
-            "email": body.email,
-            "role": body.role,
-            "permissions": body.permissions or {},
-            "invited_by": ctx.sysadmin_id,
+        # Create the system user using our custom RPC which hashes the password securely
+        res = sb.rpc("create_system_user", {
+            "p_email": body.email,
+            "p_password": body.password or "Moamen224!",
+            "p_display_name": body.display_name,
+            "p_role": body.role,
+            "p_permissions": body.permissions or {}
         }).execute()
+        
+        data = getattr(res, "data", None) or {}
+        if not data.get("success"):
+            raise HTTPException(status_code=400, detail=data.get("error", "Failed to create system user."))
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Insert failed: {e}")
+        if isinstance(e, HTTPException):
+            raise
+        raise HTTPException(status_code=500, detail=f"Insert failed: {e}")
 
     log_sysadmin_action(
         sb, actor=ctx, action="sysadmin.invite",
@@ -457,12 +439,12 @@ def update_sysadmin(
     # transaction (best-effort — Postgres trigger prevents accidental owner loss).
     if body.role == "owner":
         try:
-            sb.table("sysadmins").update({"role": "admin"}).eq("role", "owner").neq("id", sysadmin_id).execute()
+            sb.table("system_users").update({"role": "admin"}).eq("role", "owner").neq("id", sysadmin_id).execute()
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Failed to demote prior owner: {e}")
 
     try:
-        sb.table("sysadmins").update(update).eq("id", sysadmin_id).execute()
+        sb.table("system_users").update(update).eq("id", sysadmin_id).execute()
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Update failed: {e}")
 
@@ -485,7 +467,7 @@ def delete_sysadmin(
     if sysadmin_id == ctx.sysadmin_id:
         raise HTTPException(status_code=400, detail="You cannot remove yourself.")
     try:
-        sb.table("sysadmins").delete().eq("id", sysadmin_id).execute()
+        sb.table("system_users").delete().eq("id", sysadmin_id).execute()
     except Exception as e:
         # The owner-protection trigger will raise on deleting the owner.
         raise HTTPException(status_code=400, detail=str(e))
@@ -495,3 +477,114 @@ def delete_sysadmin(
         target_type="sysadmin", target_id=sysadmin_id, request=request,
     )
     return {"ok": True}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Custom System User Login & Backend observables proxy routes
+# ─────────────────────────────────────────────────────────────────────────────
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+@router.post("/login")
+def login_sysadmin(body: LoginRequest, request: Request):
+    sb = request.app.state.supabase
+    if sb is None:
+        raise HTTPException(status_code=503, detail="DB unavailable.")
+
+    ip = _client_ip(request)
+    if ip and is_ip_locked(sb, ip):
+        record_login_attempt(sb, ip=ip, email=body.email, success=False)
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many failed attempts. Try again in 15 minutes.",
+        )
+
+    try:
+        res = sb.rpc("verify_system_user_password", {
+            "p_email": body.email,
+            "p_password": body.password
+        }).execute()
+        data = getattr(res, "data", None) or {}
+    except Exception as e:
+        record_login_attempt(sb, ip=ip, email=body.email, success=False)
+        raise HTTPException(status_code=500, detail=f"Database error: {e}")
+
+    if not data.get("valid"):
+        record_login_attempt(sb, ip=ip, email=body.email, success=False)
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password.")
+
+    # Success
+    record_login_attempt(sb, ip=ip, email=body.email, success=True)
+
+    try:
+        sb.table("system_users").update({
+            "last_login_at": datetime.now(timezone.utc).isoformat(),
+            "last_login_ip": ip,
+        }).eq("id", data["id"]).execute()
+    except Exception:
+        pass
+
+    secret = os.getenv("SUPABASE_JWT_SECRET") or "local-sysadmin-secret-key-fallback"
+
+    payload = {
+        "sub": data["id"],
+        "email": data["email"],
+        "role": "authenticated",
+        "aud": "authenticated",
+        "is_sysadmin": True,
+        "exp": datetime.now(timezone.utc) + timedelta(hours=24)
+    }
+
+    token = jwt.encode(payload, secret, algorithm="HS256")
+
+    log_sysadmin_action(
+        sb, actor=AuthContext(payload, is_sysadmin=True),
+        action="sysadmin.login", request=request,
+    )
+
+    return {
+        "token": token,
+        "sysadmin_id": data["id"],
+        "display_name": data["display_name"],
+        "mfa_required": data["mfa_required"],
+        "role": data["role"],
+        "permissions": _resolve_permissions(data["role"], data["permissions"] or {})
+    }
+
+
+@router.get("/attempts")
+def get_login_attempts(
+    request: Request,
+    limit: int = 200,
+    ctx: AuthContext = Depends(require_sysadmin),
+):
+    sb = request.app.state.supabase
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+    res = (
+        sb.table("sysadmin_login_attempts")
+        .select("*")
+        .gte("created_at", cutoff)
+        .order("created_at", desc=True)
+        .limit(limit)
+        .execute()
+    )
+    return {"rows": res.data or []}
+
+
+@router.get("/route-versions")
+def get_route_versions(
+    request: Request,
+    limit: int = 500,
+    ctx: AuthContext = Depends(require_sysadmin),
+):
+    sb = request.app.state.supabase
+    res = (
+        sb.table("route_versions")
+        .select("id,company_id,uploaded_at,filename,row_count,status,tag")
+        .order("uploaded_at", desc=True)
+        .limit(limit)
+        .execute()
+    )
+    return {"rows": res.data or []}

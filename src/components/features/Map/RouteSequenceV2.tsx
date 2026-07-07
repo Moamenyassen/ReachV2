@@ -924,33 +924,45 @@ const RouteSequenceV2: React.FC<RouteSequenceV2Props> = ({ companyId, activeVers
                     );
                 }
                 setDbBranches(branches);
-                const branchOptions = branches.map(b => ({ val: b.name_en, count: filterStats.branches[b.name_en] || 0 }));
-                setAvailableRegions(branchOptions);
 
                 const savedStr = localStorage.getItem('rg_dash_regions');
                 const saved = savedStr ? JSON.parse(savedStr) : null;
-                const hasValid = saved && saved.some((r: string) => branchOptions.map(b => b.val).includes(r));
-                if (branchOptions.length > 0 && selectedRegions.length === 1 && selectedRegions[0] === 'All' && !hasValid) {
-                    setSelectedRegions([branchOptions[0].val]);
+                const branchNames = branches.map(b => b.name_en);
+                const hasValid = saved && saved.some((r: string) => branchNames.includes(r));
+                if (branches.length > 0 && selectedRegions.length === 1 && selectedRegions[0] === 'All' && !hasValid) {
+                    setSelectedRegions([branchNames[0]]);
                 }
             } catch (err) { console.error("Failed to load DB branches:", err); }
         };
         loadBranches();
     }, [companyId, isAdmin, userBranchIds]);
 
+    // Derive branch dropdown options from loaded branches + filterStats.
+    // Done as a memo (not state) so counts update once filterStats arrives,
+    // regardless of whether branches loaded first.
+    useEffect(() => {
+        const options = dbBranches.map(b => ({ val: b.name_en, count: filterStats.branches[b.name_en] || 0 }));
+        setAvailableRegions(options);
+    }, [dbBranches, filterStats]);
+
+    const [companyRouteNames, setCompanyRouteNames] = useState<string[]>([]);
     useEffect(() => {
         if (!companyId) return;
         const loadRoutes = async () => {
             setIsRoutesLoading(true);
             const branchFilter = selectedRegions.includes('All') ? undefined : selectedRegions;
             const data = await fetchCompanyRoutes(companyId, branchFilter);
-            const mapped = data.map((r: any) => ({ val: r.routeName, count: filterStats.routes[r.routeName] || 0 }));
-            setAvailableRoutes(mapped);
+            setCompanyRouteNames(data.map((r: any) => r.routeName));
             setIsRoutesLoading(false);
-            if (mapped.length === 0) setSelectedRoutes(['All']);
+            if (data.length === 0) setSelectedRoutes(['All']);
         };
         loadRoutes();
     }, [companyId, selectedRegions]);
+
+    // Same pattern for routes — counts come from filterStats which may arrive after the route list.
+    useEffect(() => {
+        setAvailableRoutes(companyRouteNames.map(name => ({ val: name, count: filterStats.routes[name] || 0 })));
+    }, [companyRouteNames, filterStats]);
 
     useEffect(() => {
         if (!companyId) return;

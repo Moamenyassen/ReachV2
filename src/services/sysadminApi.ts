@@ -11,6 +11,10 @@ const API_BASE =
     'http://localhost:8000';
 
 async function authHeaders(): Promise<Record<string, string>> {
+    const sysadminToken = localStorage.getItem('rg_sysadmin_token');
+    if (sysadminToken) {
+        return { Authorization: `Bearer ${sysadminToken}`, 'Content-Type': 'application/json' };
+    }
     const { data } = await supabase.auth.getSession();
     const token = data.session?.access_token;
     if (!token) throw new Error('Not authenticated.');
@@ -78,9 +82,26 @@ export const ALL_PERMISSIONS: Permission[] = [
 ];
 
 export const sysadminApi = {
+    login: (email: string, password: string) => fetch(`${API_BASE}/sysadmin/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password })
+    }).then(async res => {
+        if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+        const data = await res.json();
+        if (data.token) {
+            localStorage.setItem('rg_sysadmin_token', data.token);
+        }
+        return data;
+    }),
+    logout: async () => {
+        localStorage.removeItem('rg_sysadmin_token');
+    },
     verify: () => get<VerifyResponse>('/sysadmin/verify'),
     geminiUsage: (days = 30) => get<{ rows: any[] }>(`/sysadmin/usage/gemini?days=${days}`),
     scanUsage: (days = 30) => get<{ rows: any[] }>(`/sysadmin/usage/scans?days=${days}`),
+    attempts: () => get<{ rows: any[] }>('/sysadmin/attempts'),
+    routeVersions: () => get<{ rows: any[] }>('/sysadmin/route-versions'),
     auditLog: (days = 30) => get<{ rows: any[] }>(`/sysadmin/audit?days=${days}`),
     errorsLog: (days = 7, unresolvedOnly = false) =>
         get<{ rows: any[] }>(`/sysadmin/errors?days=${days}&unresolved_only=${unresolvedOnly}`),
