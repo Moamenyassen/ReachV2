@@ -89,8 +89,8 @@ def _verify_jwt(token: str) -> Dict[str, Any]:
             )
         except jwt.ExpiredSignatureError:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session expired.")
-        except jwt.InvalidTokenError as e:
-            # Could be a token signed with the legacy HS256 key — try fallback below.
+        except Exception as e:
+            # Could be a token signed with the legacy HS256 key (e.g. kid is None) — try fallback below.
             last_error = e
 
     # 2) Legacy HS256 fallback (or local dev fallback)
@@ -155,7 +155,7 @@ _ROLE_DEFAULTS: Dict[str, Dict[str, bool]] = {
         "view_audit_log": True, "view_usage": True,
     },
     "admin": {
-        "manage_sysadmins": False, "manage_companies": True, "manage_licenses": True,
+        "manage_sysadmins": True, "manage_companies": True, "manage_licenses": True,
         "manage_plans": True, "manage_promos": True, "manage_affiliates": True,
         "force_logout": True, "resolve_errors": True, "set_feature_flags": True,
         "view_audit_log": True, "view_usage": True,

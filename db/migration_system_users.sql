@@ -38,8 +38,14 @@ CREATE TABLE IF NOT EXISTS public.system_users (
     mfa_required    boolean NOT NULL DEFAULT false,
     last_login_at   timestamp with time zone,
     last_login_ip   text,
+    invited_by      uuid,
+    invited_at      timestamp with time zone,
     created_at      timestamp with time zone DEFAULT now()
 );
+
+-- Ensure columns exist in case the table was already created
+ALTER TABLE public.system_users ADD COLUMN IF NOT EXISTS invited_by uuid;
+ALTER TABLE public.system_users ADD COLUMN IF NOT EXISTS invited_at timestamp with time zone;
 
 CREATE INDEX IF NOT EXISTS idx_system_users_email ON public.system_users(email);
 

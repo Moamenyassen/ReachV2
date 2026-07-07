@@ -1139,4 +1139,6 @@ Limits enforced in:
 
 | 2026-07-07 | feat: make Users the first tab in System section, rename to Users, and support direct creation with passwords | `src/components/admin/SysAdmin/SysAdminTeam.tsx`, `src/components/admin/SysAdminDashboard.tsx`, `src/services/sysadminApi.ts` |
 
+| 2026-07-07 | feat: give admin role manage_sysadmins privileges by default to manage system users | `db/migration_system_users.sql`, `server_py/security.py` |
+
 *Last updated: 2026-07-07*
