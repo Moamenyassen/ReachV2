@@ -1141,4 +1141,6 @@ Limits enforced in:
 
 | 2026-07-07 | feat: give admin role manage_sysadmins privileges by default to manage system users | `db/migration_system_users.sql`, `server_py/security.py` |
 
+| 2026-07-07 | fix: add PATCH and DELETE to CORS allowed methods in main.py | `server_py/main.py` |
+
 *Last updated: 2026-07-07*
