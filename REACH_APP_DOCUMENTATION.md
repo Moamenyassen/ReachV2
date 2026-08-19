@@ -1145,4 +1145,6 @@ Limits enforced in:
 
 | 2026-07-07 | fix: resolve false-positive company deletion error by checking existence instead of delete select row output | `src/services/supabase.ts` |
 
-*Last updated: 2026-07-07*
+| 2026-08-19 | fix: add backup local ports (3000, 3002) to FastAPI CORS default allowlist to prevent sysadmin login failures | `server_py/main.py` |
+
+*Last updated: 2026-08-19*

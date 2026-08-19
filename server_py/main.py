@@ -41,7 +41,7 @@ app.include_router(excel_etl_router)
 app.include_router(sysadmin_router)
 
 # CORS — strict allowlist. Override via env CORS_ALLOWED_ORIGINS (comma-separated).
-_default_origins = "http://localhost:3001,http://localhost:5173,http://127.0.0.1:3001"
+_default_origins = "http://localhost:3000,http://localhost:3001,http://localhost:3002,http://localhost:5173,http://127.0.0.1:3001"
 _allowed_origins = [
     o.strip() for o in os.getenv("CORS_ALLOWED_ORIGINS", _default_origins).split(",") if o.strip()
 ]
